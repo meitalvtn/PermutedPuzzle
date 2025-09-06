@@ -3,8 +3,7 @@ __pycache__/
 *.pyc
 
 # Data & results
-data/
-results/
+test_data/
 
 # Env & secrets
 .venv/

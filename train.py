@@ -1,12 +1,16 @@
+import os
 import argparse
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.cuda.amp import GradScaler, autocast
+import random, numpy as np
 
 from permuted_puzzle.models import REGISTRY
 from permuted_puzzle.transforms import baseline_train_transforms, baseline_val_transforms
 from permuted_puzzle.data import get_dataloaders
+from permuted_puzzle.utils_io import save_run, save_preds
+
 
 def train_one_epoch(model, loader, criterion, optimizer, scaler, device):
     model.train()
@@ -47,6 +51,11 @@ def evaluate(model, loader, criterion, device):
     return running_loss / total, correct / total
 
 def main(args):
+    # Reproducibility
+    torch.manual_seed(0); random.seed(0); np.random.seed(0)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(0)
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Training with model: {args.model}")
 
@@ -68,20 +77,66 @@ def main(args):
     scaler = GradScaler()
 
     # 5. Training loop
-    best_val_acc = 0
+    history = {"train_loss": [], "val_loss": [], "val_acc": []}
+    best_val_acc = 0.0
+    best_epoch = -1
+    best_tmp_path = os.path.join(args.out, f"{args.model}_best_tmp.pth")
+
     for epoch in range(args.epochs):
         train_loss, train_acc = train_one_epoch(model, train_loader, criterion, optimizer, scaler, device)
         val_loss, val_acc = evaluate(model, val_loader, criterion, device)
 
+        history["train_loss"].append(float(train_loss))
+        history["val_loss"].append(float(val_loss))
+        history["val_acc"].append(float(val_acc))
         print(f"Epoch {epoch+1}/{args.epochs}: "
               f"Train Loss={train_loss:.4f}, Train Acc={train_acc:.4f}, "
               f"Val Loss={val_loss:.4f}, Val Acc={val_acc:.4f}")
 
         if val_acc > best_val_acc:
             best_val_acc = val_acc
-            torch.save(model.state_dict(), f"{args.model}_best.pth")
+            best_epoch = epoch + 1
+            torch.save(model.state_dict(), best_tmp_path)
 
-    print(f"Best Val Accuracy: {best_val_acc:.4f}")
+    # Reload best weights before saving
+    if os.path.exists(best_tmp_path):
+        model.load_state_dict(torch.load(best_tmp_path, map_location=device))
+
+    print(f"Best Val Accuracy: {best_val_acc:.4f} at epoch {best_epoch}")
+
+    hyper = {
+        "epochs": args.epochs, "batch_size": args.batch_size,
+        "lr": args.lr, "wd": args.wd, "optimizer": "AdamW",
+        "dropout": args.dropout
+    }
+    save_run(
+        results_root=args.out,
+        model_name=args.model,
+        grid_size=args.grid,
+        model=model,
+        history=history,
+        meta=meta,
+        hyper=hyper,
+        notes="Baseline, 224x224, ImageNet norm"
+    )
+
+    if args.save_preds:
+        save_preds(
+            results_root=args.out,
+            model_name=args.model,
+            grid_size=args.grid,
+            split="val",
+            model=model,
+            loader=val_loader,
+            device=device,
+        )
+
+    print(f"Saved outputs under: {args.out}")
+
+    # Clean up temp checkpoint
+    if os.path.exists(best_tmp_path):
+        os.remove(best_tmp_path)
+        print(f"Removed temp checkpoint: {best_tmp_path}")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -92,6 +147,10 @@ if __name__ == "__main__":
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--wd", type=float, default=1e-4)
     parser.add_argument("--dropout", type=float, default=0.2)
+    parser.add_argument("--out", type=str, default="results", help="Root folder to save outputs")
+    parser.add_argument("--grid", type=int, default=1, help="Grid size (1 = baseline)")
+    parser.add_argument("--save_preds", action="store_true", help="Also dump val preds to NPZ")
+
     args = parser.parse_args()
 
     main(args)
