@@ -1,0 +1,12 @@
+# Python
+__pycache__/
+*.pyc
+
+# Data & results
+data/
+results/
+
+# Env & secrets
+.venv/
+.env
+.kaggle/
