@@ -38,14 +38,12 @@ def save_run(
     notes: str = ""
 ) -> dict:
     """
-    Saves into: {results_root}/{model_name}/{grid_size}/
+    Saves into: {results_root}/
       - best.pth
       - metrics.json
-    Updates results_root/manifest.json to keep the BEST run per (model, grid)
-      (best judged by max val_acc in this run's history).
+    Updates ../manifest.json (one level up from results_root) to keep the BEST run per (model, grid).
     """
-    root = Path(results_root)
-    run_dir = root / model_name / str(grid_size)
+    run_dir = Path(results_root)
     _ensure_dir(run_dir)
 
     # 1) Weights
@@ -53,6 +51,13 @@ def save_run(
     torch.save(model.state_dict(), weights_path)
 
     # 2) Metrics.json (self-contained and portable)
+    metrics_path = run_dir / "metrics.json"
+    # library root is the parent of the run folder
+    lib_root = run_dir.parent
+    # store relpaths relative to the library root
+    weights_relpath = os.path.relpath(weights_path, start=lib_root)
+    metrics_relpath = os.path.relpath(metrics_path, start=lib_root)
+
     metrics = {
         "model": model_name,
         "grid_size": grid_size,
@@ -65,24 +70,20 @@ def save_run(
         "notes": notes,
         "saved_at": _now(),
         "env": _env_info(),
-        # store paths **relative to results_root** for portability
-        "weights_relpath": f"{model_name}/{grid_size}/best.pth",
-        "metrics_relpath": f"{model_name}/{grid_size}/metrics.json",
+        "weights_relpath": weights_relpath,
+        "metrics_relpath": metrics_relpath
     }
-    metrics_path = run_dir / "metrics.json"
     _atomic_write_json(metrics_path, metrics)
 
-    # 3) Manifest.json (best per (model, grid))
-    manifest_path = root / "manifest.json"
+    # 3) Manifest.json (best per (model, grid)) at the library root
+    manifest_path = lib_root / "manifest.json"
     if manifest_path.exists():
         with open(manifest_path, "r") as f:
             manifest = json.load(f)
     else:
         manifest = []
 
-    # de-dup by (model, grid)
-    keep = []
-    existing = None
+    keep, existing = [], None
     for m in manifest:
         if m.get("model") == model_name and int(m.get("grid_size")) == int(grid_size):
             existing = m
@@ -94,18 +95,15 @@ def save_run(
         "grid_size": int(grid_size),
         "best_val_accuracy": metrics["best_val_accuracy"],
         "epochs": metrics["epochs"],
-        "weights_relpath": metrics["weights_relpath"],
-        "metrics_relpath": metrics["metrics_relpath"],
+        "weights_relpath": weights_relpath,
+        "metrics_relpath": metrics_relpath,
         "notes": notes,
         "updated_at": _now(),
     }
 
-    # keep the better of (existing.best_acc vs this run.best_acc)
     if existing and (existing.get("best_val_accuracy", 0.0) > new_entry["best_val_accuracy"]):
-        # existing is still better → keep existing as best
         keep.append(existing)
     else:
-        # this run is best (or first one)
         keep.append(new_entry)
 
     _atomic_write_json(manifest_path, keep)
@@ -114,8 +112,11 @@ def save_run(
         "weights_path": str(weights_path),
         "metrics_path": str(metrics_path),
         "run_dir": str(run_dir),
-        "is_best_in_manifest": (not existing) or (new_entry in keep and new_entry.get("best_val_accuracy", 0) >= (existing or {}).get("best_val_accuracy", 0)),
+        "is_best_in_manifest": (not existing) or (
+            new_entry.get("best_val_accuracy", 0) >= (existing or {}).get("best_val_accuracy", 0)
+        ),
     }
+
 
 def save_preds(
     results_root: str,
@@ -127,7 +128,7 @@ def save_preds(
     device: str
 ) -> str:
     """
-    Saves into: {results_root}/{model_name}/{grid_size}/preds_{split}.npz
+    Saves into: {results_root}/preds_{split}.npz
     Contains: logits, labels, preds (argmax)
     """
     model.eval()
@@ -143,7 +144,7 @@ def save_preds(
     labels = torch.cat(all_labels).numpy()
     preds = logits.argmax(axis=1)
 
-    run_dir = Path(results_root) / model_name / str(grid_size)
+    run_dir = Path(results_root)
     _ensure_dir(run_dir)
     out_path = run_dir / f"preds_{split}.npz"
     np.savez_compressed(out_path, logits=logits, labels=labels, preds=preds)
