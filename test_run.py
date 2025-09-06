@@ -50,5 +50,5 @@ if __name__ == "__main__":
     )
 
     os.system(
-        run_efficientnet,
+        run_simple_cnn,
     )

@@ -3,6 +3,7 @@ import argparse
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from pathlib import Path
 from torch.cuda.amp import GradScaler, autocast
 import random, numpy as np
 
@@ -80,6 +81,8 @@ def main(args):
     history = {"train_loss": [], "val_loss": [], "val_acc": []}
     best_val_acc = 0.0
     best_epoch = -1
+
+    Path(args.out).mkdir(parents=True, exist_ok=True)
     best_tmp_path = os.path.join(args.out, f"{args.model}_best_tmp.pth")
 
     for epoch in range(args.epochs):
