@@ -1,93 +1,150 @@
-import os, json, time, hashlib, platform
+import os, json, time, platform
 from pathlib import Path
+from typing import Dict, Iterable, Tuple, Optional
 import torch
 import numpy as np
 
-def _ensure(p: str): Path(p).mkdir(parents=True, exist_ok=True)
+def _ensure_dir(p: Path) -> None:
+    p.mkdir(parents=True, exist_ok=True)
 
-def save_run(results_root: str,
-             model_name: str,
-             grid_size: int,
-             model: torch.nn.Module,
-             history: dict,
-             meta: dict,
-             hyper: dict,
-             notes: str = "") -> dict:
+def _atomic_write_json(path: Path, obj: dict) -> None:
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with open(tmp, "w") as f:
+        json.dump(obj, f, indent=2)
+    tmp.replace(path)
+
+def _now() -> str:
+    return time.strftime("%Y-%m-%d %H:%M:%S")
+
+def _env_info() -> dict:
+    return {"python": platform.python_version(), "torch": torch.__version__}
+
+def _best_acc(history: Dict[str, Iterable[float]]) -> float:
+    v = history.get("val_acc") or []
+    return float(max(v)) if len(v) else 0.0
+
+def _final_acc(history: Dict[str, Iterable[float]]) -> Optional[float]:
+    v = history.get("val_acc") or []
+    return float(v[-1]) if len(v) else None
+
+def save_run(
+    results_root: str,
+    model_name: str,
+    grid_size: int,
+    model: torch.nn.Module,
+    history: Dict[str, Iterable[float]],
+    meta: dict,
+    hyper: dict,
+    notes: str = ""
+) -> dict:
     """
-    history: {"train_loss": [...], "val_acc": [...], "val_loss": [...]} (any you track)
-    meta:    {"input_size": 224, "mean": [...], "std": [...]}
-    hyper:   {"epochs": int, "batch_size": int, "lr": float, "wd": float, "optimizer": "..."}
+    Saves into: {results_root}/{model_name}/{grid_size}/
+      - best.pth
+      - metrics.json
+    Updates results_root/manifest.json to keep the BEST run per (model, grid)
+      (best judged by max val_acc in this run's history).
     """
-    results_root = str(results_root)
-    model_dir   = f"{results_root}/models/{model_name}/{grid_size}"
-    metrics_dir = f"{results_root}/metrics/{model_name}"
-    _ensure(model_dir); _ensure(metrics_dir)
+    root = Path(results_root)
+    run_dir = root / model_name / str(grid_size)
+    _ensure_dir(run_dir)
 
     # 1) Weights
-    weights_path = f"{model_dir}/best.pth"
+    weights_path = run_dir / "best.pth"
     torch.save(model.state_dict(), weights_path)
 
-    # 2) Metrics.json
-    metrics_path = f"{metrics_dir}/{grid_size}.json"
+    # 2) Metrics.json (self-contained and portable)
     metrics = {
         "model": model_name,
         "grid_size": grid_size,
         "epochs": int(hyper.get("epochs", len(history.get("val_acc", [])))),
-        "final_val_accuracy": float(history.get("val_acc", [0])[-1]) if history.get("val_acc") else None,
-        "best_val_accuracy": float(max(history.get("val_acc", [0]))),
+        "final_val_accuracy": _final_acc(history),
+        "best_val_accuracy": _best_acc(history),
         "history": {k: list(map(float, v)) for k, v in history.items()},
         "meta": meta,
         "hyper": hyper,
         "notes": notes,
-        "saved_at": time.strftime("%Y-%m-%d %H:%M:%S"),
-        "env": {"python": platform.python_version(), "torch": torch.__version__},
-        "weights": weights_path,
+        "saved_at": _now(),
+        "env": _env_info(),
+        # store paths **relative to results_root** for portability
+        "weights_relpath": f"{model_name}/{grid_size}/best.pth",
+        "metrics_relpath": f"{model_name}/{grid_size}/metrics.json",
     }
-    with open(metrics_path, "w") as f: json.dump(metrics, f, indent=2)
+    metrics_path = run_dir / "metrics.json"
+    _atomic_write_json(metrics_path, metrics)
 
-    # 3) Manifest (dedupe on model+grid)
-    manifest_path = f"{results_root}/manifest.json"
-    if os.path.exists(manifest_path):
-        with open(manifest_path, "r") as f: manifest = json.load(f)
+    # 3) Manifest.json (best per (model, grid))
+    manifest_path = root / "manifest.json"
+    if manifest_path.exists():
+        with open(manifest_path, "r") as f:
+            manifest = json.load(f)
     else:
         manifest = []
 
-    manifest = [m for m in manifest if not (m["model"] == model_name and m["grid_size"] == grid_size)]
-    manifest.append({
+    # de-dup by (model, grid)
+    keep = []
+    existing = None
+    for m in manifest:
+        if m.get("model") == model_name and int(m.get("grid_size")) == int(grid_size):
+            existing = m
+        else:
+            keep.append(m)
+
+    new_entry = {
         "model": model_name,
-        "grid_size": grid_size,
-        "epochs": metrics["epochs"],
-        "final_val_accuracy": metrics["final_val_accuracy"],
+        "grid_size": int(grid_size),
         "best_val_accuracy": metrics["best_val_accuracy"],
-        "weights": weights_path,
-        "metrics": metrics_path,
+        "epochs": metrics["epochs"],
+        "weights_relpath": metrics["weights_relpath"],
+        "metrics_relpath": metrics["metrics_relpath"],
         "notes": notes,
-    })
-    with open(manifest_path, "w") as f: json.dump(manifest, f, indent=2)
+        "updated_at": _now(),
+    }
 
-    return {"weights_path": weights_path, "metrics_path": metrics_path}
+    # keep the better of (existing.best_acc vs this run.best_acc)
+    if existing and (existing.get("best_val_accuracy", 0.0) > new_entry["best_val_accuracy"]):
+        # existing is still better → keep existing as best
+        keep.append(existing)
+    else:
+        # this run is best (or first one)
+        keep.append(new_entry)
 
-def save_preds(results_root: str,
-               model_name: str,
-               grid_size: int,
-               split: str,
-               model: torch.nn.Module,
-               loader,
-               device: str):
+    _atomic_write_json(manifest_path, keep)
+
+    return {
+        "weights_path": str(weights_path),
+        "metrics_path": str(metrics_path),
+        "run_dir": str(run_dir),
+        "is_best_in_manifest": (not existing) or (new_entry in keep and new_entry.get("best_val_accuracy", 0) >= (existing or {}).get("best_val_accuracy", 0)),
+    }
+
+def save_preds(
+    results_root: str,
+    model_name: str,
+    grid_size: int,
+    split: str,
+    model: torch.nn.Module,
+    loader,
+    device: str
+) -> str:
+    """
+    Saves into: {results_root}/{model_name}/{grid_size}/preds_{split}.npz
+    Contains: logits, labels, preds (argmax)
+    """
     model.eval()
     all_logits, all_labels = [], []
     with torch.no_grad():
         for xb, yb in loader:
             xb, yb = xb.to(device), yb.to(device)
             logits = model(xb)
-            all_logits.append(logits.cpu())
-            all_labels.append(yb.cpu())
-    all_logits = torch.cat(all_logits).numpy()
-    all_labels = torch.cat(all_labels).numpy()
-    preds = all_logits.argmax(axis=1)
+            all_logits.append(logits.detach().cpu())
+            all_labels.append(yb.detach().cpu())
 
-    out_dir = f"{results_root}/preds"
-    _ensure(out_dir)
-    out_path = f"{out_dir}/{model_name}_{grid_size}_{split}.npz"
-    np.savez_compressed(out_path, logits=all_logits, labels=all_labels, preds=preds)
-    return out_path
+    logits = torch.cat(all_logits).numpy()
+    labels = torch.cat(all_labels).numpy()
+    preds = logits.argmax(axis=1)
+
+    run_dir = Path(results_root) / model_name / str(grid_size)
+    _ensure_dir(run_dir)
+    out_path = run_dir / f"preds_{split}.npz"
+    np.savez_compressed(out_path, logits=logits, labels=labels, preds=preds)
+    return str(out_path)
