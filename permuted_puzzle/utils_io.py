@@ -41,7 +41,6 @@ def save_run(
     Saves into: {results_root}/
       - best.pth
       - metrics.json
-    Updates ../manifest.json (one level up from results_root) to keep the BEST run per (model, grid).
     """
     run_dir = Path(results_root)
     _ensure_dir(run_dir)
@@ -75,46 +74,10 @@ def save_run(
     }
     _atomic_write_json(metrics_path, metrics)
 
-    # 3) Manifest.json (best per (model, grid)) at the library root
-    manifest_path = lib_root / "manifest.json"
-    if manifest_path.exists():
-        with open(manifest_path, "r") as f:
-            manifest = json.load(f)
-    else:
-        manifest = []
-
-    keep, existing = [], None
-    for m in manifest:
-        if m.get("model") == model_name and int(m.get("grid_size")) == int(grid_size):
-            existing = m
-        else:
-            keep.append(m)
-
-    new_entry = {
-        "model": model_name,
-        "grid_size": int(grid_size),
-        "best_val_accuracy": metrics["best_val_accuracy"],
-        "epochs": metrics["epochs"],
-        "weights_relpath": weights_relpath,
-        "metrics_relpath": metrics_relpath,
-        "notes": notes,
-        "updated_at": _now(),
-    }
-
-    if existing and (existing.get("best_val_accuracy", 0.0) > new_entry["best_val_accuracy"]):
-        keep.append(existing)
-    else:
-        keep.append(new_entry)
-
-    _atomic_write_json(manifest_path, keep)
-
     return {
         "weights_path": str(weights_path),
         "metrics_path": str(metrics_path),
         "run_dir": str(run_dir),
-        "is_best_in_manifest": (not existing) or (
-            new_entry.get("best_val_accuracy", 0) >= (existing or {}).get("best_val_accuracy", 0)
-        ),
     }
 
 
