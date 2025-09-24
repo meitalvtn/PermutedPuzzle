@@ -9,7 +9,7 @@ import random, numpy as np
 
 from permuted_puzzle.models import REGISTRY
 from permuted_puzzle.transforms import baseline_train_transforms, baseline_val_transforms
-from permuted_puzzle.data import get_dataloaders
+from permuted_puzzle.data import get_dataloaders, DogsVsCatsDataset, PermutedDogsVsCatsDataset
 from permuted_puzzle.utils_io import save_run, save_preds
 
 
@@ -70,7 +70,28 @@ def main(args):
     val_tfms   = baseline_val_transforms(meta["input_size"], meta["mean"], meta["std"])
 
     # 3. Data
-    train_loader, val_loader = get_dataloaders(args.data, train_tfms, val_tfms, batch_size=args.batch_size)
+    if args.grid == 1:
+        # Baseline (no permutation)
+        train_loader, val_loader = get_dataloaders(
+            args.data, train_tfms, val_tfms, batch_size=args.batch_size
+        )
+    else:
+        # Build base datasets
+        base_train = DogsVsCatsDataset(args.data, transform=train_tfms)
+        base_val = DogsVsCatsDataset(args.data, transform=val_tfms)
+
+        # (Optional) create a fixed permutation for reproducibility
+        N = args.grid * args.grid
+        fixed_perm = list(range(N))
+        random.seed(0)  # reproducible permutation
+        random.shuffle(fixed_perm)
+
+        # Wrap with permutation
+        train_ds = PermutedDogsVsCatsDataset(base_train, grid_size=args.grid, permutation=fixed_perm)
+        val_ds = PermutedDogsVsCatsDataset(base_val, grid_size=args.grid, permutation=fixed_perm)
+
+        train_loader = torch.utils.data.DataLoader(train_ds, batch_size=args.batch_size, shuffle=True, num_workers=2)
+        val_loader = torch.utils.data.DataLoader(val_ds, batch_size=args.batch_size, shuffle=False, num_workers=2)
 
     # 4. Training setup
     criterion = nn.CrossEntropyLoss()

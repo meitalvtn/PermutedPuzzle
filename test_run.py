@@ -1,54 +1,46 @@
 import os
 from pathlib import Path
 
-def prepare_small_dataset(root="test_data", n_samples=200):
+def prepare_small_dataset(root="test_data"):
     """
-    Instead of downloading the full Kaggle dataset, just point to
-    the local test_data directory inside the project.
+    Use a tiny sample dataset placed at test_data/data/.
     """
     root = Path(root)
     small_dir = root / "data"
-
     if not small_dir.exists() or not any(small_dir.iterdir()):
         raise FileNotFoundError(
             f"No test data found at {small_dir}. "
             "Please place your sample images there."
         )
-
     return str(small_dir)
 
 if __name__ == "__main__":
     data_path = prepare_small_dataset()
-    out_dir = "test_data/results"
-    Path(out_dir).mkdir(parents=True, exist_ok=True)
+    out_root = Path("test_data/results")
+    out_root.mkdir(parents=True, exist_ok=True)
 
-    # run train.py with 1 epoch
-    run_simple_cnn = (
-        f"python train.py --model simple_cnn "
-        f"--data {data_path} --epochs 1 --batch_size 16 --lr 3e-4 "
-        f"--out {out_dir} --grid 1 --save_preds"
-    )
-    run_resnet18 = (
-        f"python train.py --model resnet18 "
-        f"--data {data_path} --epochs 1 --batch_size 16 "
-        f"--out {out_dir} --grid 1 --save_preds"
-    )
-    run_mobilenet = (
-        f"python train.py --model mobilenet_v3_large "
-        f"--data {data_path} --epochs 1 --batch_size 16 "
-        f"--out {out_dir} --grid 1 --save_preds"
-    )
-    run_efficientnet = (
-        f"python train.py --model efficientnet_b0 "
-        f"--data {data_path} --epochs 1 --batch_size 16 "
-        f"--out {out_dir} --grid 1 --save_preds"
-    )
-    run_convnext = (
-        f"python train.py --model convnext_tiny "
-        f"--data {data_path} --epochs 1 --batch_size 16 "
-        f"--out {out_dir} --grid 1 --save_preds"
-    )
+    models = [
+        "simple_cnn",
+        "resnet18",
+        "mobilenet_v3_large",
+        "efficientnet_b0",
+        "convnext_tiny",
+    ]
+    grids = [1, 2]  # baseline and permuted
 
-    os.system(
-        run_simple_cnn,
-    )
+    for model in models:
+        for grid in grids:
+            out_dir = out_root / f"{model}_{grid}"
+            out_dir.mkdir(parents=True, exist_ok=True)
+
+            cmd = (
+                f"python train.py --model {model} "
+                f"--data {data_path} --epochs 1 --batch_size 8 "
+                f"--out {out_dir} --grid {grid} --save_preds"
+            )
+            print(f"▶ Running: {cmd}")
+            ret = os.system(cmd)
+            if ret != 0:
+                print(f"Failed: {model}, grid={grid}")
+            else:
+                print(f"Done: {model}, grid={grid}")

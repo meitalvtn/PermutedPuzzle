@@ -35,7 +35,8 @@ def save_run(
     history: Dict[str, Iterable[float]],
     meta: dict,
     hyper: dict,
-    notes: str = ""
+    notes: str = "",
+    permutation: Optional[list] = None,
 ) -> dict:
     """
     Saves into: {results_root}/
@@ -51,9 +52,7 @@ def save_run(
 
     # 2) Metrics.json (self-contained and portable)
     metrics_path = run_dir / "metrics.json"
-    # library root is the parent of the run folder
     lib_root = run_dir.parent
-    # store relpaths relative to the library root
     weights_relpath = os.path.relpath(weights_path, start=lib_root)
     metrics_relpath = os.path.relpath(metrics_path, start=lib_root)
 
@@ -70,8 +69,13 @@ def save_run(
         "saved_at": _now(),
         "env": _env_info(),
         "weights_relpath": weights_relpath,
-        "metrics_relpath": metrics_relpath
+        "metrics_relpath": metrics_relpath,
     }
+
+    # add permutation if provided
+    if permutation is not None:
+        metrics["permutation"] = permutation
+
     _atomic_write_json(metrics_path, metrics)
 
     return {
