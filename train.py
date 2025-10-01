@@ -6,11 +6,42 @@ import torch.optim as optim
 from pathlib import Path
 from torch.cuda.amp import GradScaler, autocast
 import random, numpy as np
+import matplotlib.pyplot as plt
 
 from permuted_puzzle.models import REGISTRY
 from permuted_puzzle.transforms import baseline_train_transforms, baseline_val_transforms
 from permuted_puzzle.data import get_dataloaders, DogsVsCatsDataset, PermutedDogsVsCatsDataset
 from permuted_puzzle.utils_io import save_run, save_preds
+
+
+def visualize_samples(loader, num_samples=3, grid_size=None):
+    """Show sample images as sanity check before training."""
+    # Get a batch
+    images, labels = next(iter(loader))
+    images = images[:num_samples]
+    labels = labels[:num_samples]
+
+    fig, axes = plt.subplots(1, num_samples, figsize=(5 * num_samples, 5))
+    if num_samples == 1:
+        axes = [axes]
+
+    for idx, (img, label) in enumerate(zip(images, labels)):
+        # Convert from tensor (C, H, W) to numpy (H, W, C)
+        img_np = img.permute(1, 2, 0).cpu().numpy()
+        # Denormalize if needed (assume ImageNet normalization)
+        img_np = img_np * np.array([0.229, 0.224, 0.225]) + np.array([0.485, 0.456, 0.406])
+        img_np = np.clip(img_np, 0, 1)
+
+        axes[idx].imshow(img_np)
+        class_name = "Dog" if label.item() == 1 else "Cat"
+        title = f"{class_name}"
+        if grid_size and grid_size > 1:
+            title += f" (Grid {grid_size}x{grid_size})"
+        axes[idx].set_title(title, fontsize=14)
+        axes[idx].axis('off')
+
+    plt.tight_layout()
+    plt.show()
 
 
 def train_one_epoch(model, loader, criterion, optimizer, scaler, device):
@@ -58,12 +89,30 @@ def main(args):
         torch.cuda.manual_seed_all(0)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"Training with model: {args.model}")
+
+    # Training configuration logs
+    print("\n" + "="*60)
+    print("TRAINING CONFIGURATION")
+    print("="*60)
+    print(f"Model:           {args.model}")
+    print(f"Device:          {device}")
+    print(f"Grid Size:       {args.grid}x{args.grid} {'(baseline - no permutation)' if args.grid == 1 else f'({args.grid**2} tiles)'}")
+    print(f"Epochs:          {args.epochs}")
+    print(f"Batch Size:      {args.batch_size}")
+    print(f"Learning Rate:   {args.lr}")
+    print(f"Weight Decay:    {args.wd}")
+    print(f"Dropout:         {args.dropout}")
+    print(f"Data Path:       {args.data}")
+    print(f"Output Path:     {args.out}")
+    print(f"Save Preds:      {args.save_preds}")
+    print("="*60 + "\n")
 
     # 1. Build model + meta
     build_fn = REGISTRY[args.model]
     model, meta = build_fn(num_classes=2, pretrained=True, dropout=args.dropout)
     model = model.to(device)
+    print(f"Model loaded: {args.model} (pretrained=True)")
+    print(f"Input size: {meta['input_size']}, Mean: {meta['mean']}, Std: {meta['std']}\n")
 
     # 2. Transforms
     train_tfms = baseline_train_transforms(meta["input_size"], meta["mean"], meta["std"])
@@ -72,11 +121,13 @@ def main(args):
     # 3. Data
     if args.grid == 1:
         # Baseline (no permutation)
+        print("Loading baseline data (no permutation)...")
         train_loader, val_loader = get_dataloaders(
             args.data, train_tfms, val_tfms, batch_size=args.batch_size
         )
     else:
         # Build base datasets
+        print(f"Loading data with permutation (grid {args.grid}x{args.grid})...")
         base_train = DogsVsCatsDataset(args.data, transform=train_tfms)
         base_val = DogsVsCatsDataset(args.data, transform=val_tfms)
 
@@ -85,6 +136,7 @@ def main(args):
         fixed_perm = list(range(N))
         random.seed(0)  # reproducible permutation
         random.shuffle(fixed_perm)
+        print(f"Fixed permutation (seed=0): {fixed_perm}")
 
         # Wrap with permutation
         train_ds = PermutedDogsVsCatsDataset(base_train, grid_size=args.grid, permutation=fixed_perm)
@@ -93,10 +145,20 @@ def main(args):
         train_loader = torch.utils.data.DataLoader(train_ds, batch_size=args.batch_size, shuffle=True, num_workers=2)
         val_loader = torch.utils.data.DataLoader(val_ds, batch_size=args.batch_size, shuffle=False, num_workers=2)
 
+    print(f"Train samples: {len(train_loader.dataset)}, Val samples: {len(val_loader.dataset)}\n")
+
+    # Sanity check: visualize samples before training
+    print("=== Sanity Check: Visualizing 3 sample images ===")
+    visualize_samples(train_loader, num_samples=3, grid_size=args.grid)
+
     # 4. Training setup
+    print("\n=== Starting Training ===")
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.wd)
     scaler = GradScaler()
+    print(f"Optimizer: AdamW (lr={args.lr}, wd={args.wd})")
+    print(f"Criterion: CrossEntropyLoss")
+    print(f"Mixed Precision: Enabled (GradScaler)\n")
 
     # 5. Training loop
     history = {"train_loss": [], "val_loss": [], "val_acc": []}
