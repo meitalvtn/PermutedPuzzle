@@ -4,15 +4,14 @@ import math
 import random
 from pathlib import Path
 
-import logging
-import sys
-logging.basicConfig(
-    level=logging.INFO,
-    stream=sys.stdout,
-    format="%(message)s",
-    force=True
-)
+import logging, sys
+logging.basicConfig(level=logging.INFO, stream=sys.stdout, format="%(message)s", force=True)
 logger = logging.getLogger("train")
+logger.setLevel(logging.INFO)
+logger.propagate = False
+_handler = logging.StreamHandler(sys.stdout)
+_handler.setFormatter(logging.Formatter("%(message)s"))
+logger.handlers = [_handler]
 
 import numpy as np
 import torch
@@ -38,8 +37,7 @@ def train_model(
     lr: float = 1e-4,
     wd: float = 1e-4,
     dropout: float = 0.2,
-    save_preds_flag: bool = False,
-    visualize: bool = True,
+    pretrained: bool = False,
 ) -> Dict[str, Any]:
     """
     Train a classification model on Dogs vs Cats, optionally with grid permutations.
@@ -71,14 +69,13 @@ def train_model(
     logger.info(f"Dropout:         {dropout}")
     logger.info(f"Data Path:       {data_path}")
     logger.info(f"Output Path:     {out_path}")
-    logger.info(f"Save Preds:      {save_preds_flag}")
     logger.info("=" * 60 + "\n")
 
     # 1. Build model
     build_fn = REGISTRY[model_name]
-    model, meta = build_fn(num_classes=2, pretrained=True, dropout=dropout)
+    model, meta = build_fn(num_classes=2, pretrained=pretrained, dropout=dropout)
     model = model.to(device)
-    logger.info(f"Model loaded: {model_name} (pretrained=True)")
+    logger.info(f"Model loaded: {model_name} (pretrained={pretrained})")
     logger.info(f"Input size: {meta['input_size']}, Mean: {meta['mean']}, Std: {meta['std']}\n")
 
     # 2. Transforms
@@ -116,21 +113,20 @@ def train_model(
     logger.info(f"Train samples: {len(train_loader.dataset)}, Val samples: {len(val_loader.dataset)}\n")
 
     # Sanity check
-    if visualize:
-        logger.info("--- RUNNING VISUALIZATION CHECK ---")
-        data_batch, labels_batch = next(iter(train_loader))
-        logger.info(f"Grid size for this run: {grid}")
-        logger.info(f"Shape of a single image tensor: {data_batch[0].shape}")
-        grid_img = torchvision.utils.make_grid(data_batch[:4], nrow=4)
-        mean, std = np.array([0.485, 0.456, 0.406]), np.array([0.229, 0.224, 0.225])
-        grid_img = grid_img.permute(1, 2, 0).numpy()
-        grid_img = std * grid_img + mean
-        grid_img = np.clip(grid_img, 0, 1)
-        plt.figure(figsize=(10, 10))
-        plt.title("Are these images scrambled?")
-        plt.imshow(grid_img)
-        plt.axis("off")
-        plt.show()
+    logger.info("--- RUNNING VISUALIZATION CHECK ---")
+    data_batch, labels_batch = next(iter(train_loader))
+    logger.info(f"Grid size for this run: {grid}")
+    logger.info(f"Shape of a single image tensor: {data_batch[0].shape}")
+    grid_img = torchvision.utils.make_grid(data_batch[:4], nrow=4)
+    mean, std = np.array([0.485, 0.456, 0.406]), np.array([0.229, 0.224, 0.225])
+    grid_img = grid_img.permute(1, 2, 0).numpy()
+    grid_img = std * grid_img + mean
+    grid_img = np.clip(grid_img, 0, 1)
+    plt.figure(figsize=(10, 10))
+    plt.title("Are these images scrambled?")
+    plt.imshow(grid_img)
+    plt.axis("off")
+    plt.show()
 
     # 4. Training setup
     logger.info("\n=== Starting Training ===")
@@ -210,16 +206,15 @@ def train_model(
         notes="Baseline, 224x224, ImageNet norm"
     )
 
-    if save_preds_flag:
-        save_preds(
-            results_root=out_path,
-            model_name=model_name,
-            grid_size=grid,
-            split="val",
-            model=model,
-            loader=val_loader,
-            device=device,
-        )
+    save_preds(
+        results_root=out_path,
+        model_name=model_name,
+        grid_size=grid,
+        split="val",
+        model=model,
+        loader=val_loader,
+        device=device,
+    )
 
     if os.path.exists(best_tmp_path):
         os.remove(best_tmp_path)

@@ -1,5 +1,5 @@
-import os
 from pathlib import Path
+from train import train_model
 
 def prepare_small_dataset(root="test_data"):
     """
@@ -29,14 +29,16 @@ if __name__ == "__main__":
             out_dir = out_root / f"{model}_{grid}"
             out_dir.mkdir(parents=True, exist_ok=True)
 
-            cmd = (
-                f"python train.py --model {model} "
-                f"--data {data_path} --epochs 1 --batch_size 8 "
-                f"--out {out_dir} --grid {grid} --save_preds"
-            )
-            print(f"▶ Running: {cmd}")
-            ret = os.system(cmd)
-            if ret != 0:
-                print(f"Failed: {model}, grid={grid}")
-            else:
+            print(f"▶ Running: {model}, grid={grid}")
+            try:
+                train_model(
+                    model_name=model,
+                    data_path=data_path,
+                    out_path=str(out_dir),
+                    grid=grid,
+                    epochs=1,
+                    batch_size=8
+                )
                 print(f"Done: {model}, grid={grid}")
+            except Exception as e:
+                print(f"Failed: {model}, grid={grid} - {e}")
