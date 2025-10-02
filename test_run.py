@@ -21,12 +21,8 @@ if __name__ == "__main__":
 
     models = [
         "simple_cnn",
-        "resnet18",
-        "mobilenet_v3_large",
-        "efficientnet_b0",
-        "convnext_tiny",
     ]
-    grids = [1, 2]  # baseline and permuted
+    grids = [8]  # baseline and permuted
 
     for model in models:
         for grid in grids:
