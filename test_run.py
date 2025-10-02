@@ -20,9 +20,9 @@ if __name__ == "__main__":
     out_root.mkdir(parents=True, exist_ok=True)
 
     models = [
-        "simple_cnn",
+        "resnet18",
     ]
-    grids = [8]  # baseline and permuted
+    grids = [11]  # baseline and permuted
 
     for model in models:
         for grid in grids:
