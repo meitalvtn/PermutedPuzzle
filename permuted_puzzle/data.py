@@ -13,10 +13,10 @@ class DogsVsCatsDataset(Dataset):
     def __init__(self, img_dir, transform=None):
         self.img_dir = img_dir
         self.transform = transform
-        self.image_filenames = [
+        self.image_filenames = sorted([
             fname for fname in os.listdir(img_dir)
             if fname.endswith(".jpg")
-        ]
+        ])
 
     def __len__(self):
         return len(self.image_filenames)
@@ -61,8 +61,7 @@ def get_dataloaders(img_dir, train_tfms, val_tfms, batch_size=64, val_split=0.2)
     n_val = math.floor(val_split * n_total)
     n_train = n_total - n_val
 
-    # Generate random permutation of indices (reproducible with seed=0)
-    torch.manual_seed(0)
+    # Generate random permutation of indices (reproducible, seed set in train_model)
     indices = torch.randperm(n_total).tolist()
     train_indices = indices[:n_train]
     val_indices = indices[n_train:]

@@ -111,19 +111,19 @@ def train_model(
     val_tfms = baseline_val_transforms(meta["input_size"], meta["mean"], meta["std"])
 
     # 3. Data
+    permutation = None
     if grid == 1:
         logger.info("Loading baseline data (no permutation)...")
         train_loader, val_loader = get_dataloaders(
             data_path, train_tfms, val_tfms, batch_size=batch_size
         )
     else:
-        # Split indices once (reproducible with seed=0)
+        # Split indices once (reproducible)
         full_dataset = DogsVsCatsDataset(data_path)  # just for length
         n_val = math.floor(0.2 * len(full_dataset))
         n_train = len(full_dataset) - n_val
 
         # Generate random permutation of indices
-        torch.manual_seed(0)
         indices = torch.randperm(len(full_dataset)).tolist()
         train_indices = indices[:n_train]
         val_indices = indices[n_train:]
@@ -136,11 +136,13 @@ def train_model(
         train_subset = torch.utils.data.Subset(train_base, train_indices)
         val_subset = torch.utils.data.Subset(val_base, val_indices)
 
-        # Apply permutation wrapper
+        # Apply permutation wrapper (seed set at top of function)
         N = grid * grid
-        random.seed(0)
         fixed_perm = list(range(N))
         random.shuffle(fixed_perm)
+        logger.info(f"Fixed permutation (seed=0): {fixed_perm}")
+
+        permutation = fixed_perm  # Save for metrics
 
         train_ds = PermutedDogsVsCatsDataset(train_subset, grid_size=grid, permutation=fixed_perm)
         val_ds = PermutedDogsVsCatsDataset(val_subset, grid_size=grid, permutation=fixed_perm)
@@ -157,7 +159,7 @@ def train_model(
     logger.info(f"Grid size for this run: {grid}")
     logger.info(f"Shape of a single image tensor: {data_batch[0].shape}")
     grid_img = torchvision.utils.make_grid(data_batch[:4], nrow=4)
-    mean, std = np.array([0.485, 0.456, 0.406]), np.array([0.229, 0.224, 0.225])
+    mean, std = np.array(meta['mean']), np.array(meta['std'])
     grid_img = grid_img.permute(1, 2, 0).numpy()
     grid_img = std * grid_img + mean
     grid_img = np.clip(grid_img, 0, 1)
@@ -171,12 +173,12 @@ def train_model(
     logger.info("\n=== Starting Training ===")
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=wd)
-    scaler = GradScaler()
+    scaler = GradScaler() if torch.cuda.is_available() else None
     logger.info(f"Optimizer: AdamW (lr={lr}, wd={wd})")
     logger.info(f"Criterion: CrossEntropyLoss")
-    logger.info(f"Mixed Precision: Enabled (GradScaler)\n")
+    logger.info(f"Mixed Precision: {'Enabled (GradScaler)' if scaler else 'Disabled (CPU)'}\n")
 
-    history = {"train_loss": [], "val_loss": [], "val_acc": []}
+    history = {"train_loss": [], "train_acc": [], "val_loss": [], "val_acc": []}
     best_val_acc, best_epoch = 0.0, -1
 
     Path(out_path).mkdir(parents=True, exist_ok=True)
@@ -188,12 +190,18 @@ def train_model(
         for images, labels in loader:
             images, labels = images.to(device), labels.to(device)
             optimizer.zero_grad()
-            with autocast():
+            if scaler:
+                with autocast():
+                    outputs = model(images)
+                    loss = criterion(outputs, labels)
+                scaler.scale(loss).backward()
+                scaler.step(optimizer)
+                scaler.update()
+            else:
                 outputs = model(images)
                 loss = criterion(outputs, labels)
-            scaler.scale(loss).backward()
-            scaler.step(optimizer)
-            scaler.update()
+                loss.backward()
+                optimizer.step()
             total_loss += loss.item() * images.size(0)
             correct += (outputs.argmax(1) == labels).sum().item()
             total += labels.size(0)
@@ -216,6 +224,7 @@ def train_model(
         train_loss, train_acc = train_one_epoch(model, train_loader)
         val_loss, val_acc = evaluate(model, val_loader)
         history["train_loss"].append(float(train_loss))
+        history["train_acc"].append(float(train_acc))
         history["val_loss"].append(float(val_loss))
         history["val_acc"].append(float(val_acc))
 
@@ -233,6 +242,7 @@ def train_model(
     logger.info(f"\nBest Val Accuracy: {best_val_acc:.4f} at epoch {best_epoch}\n")
 
     # Save run artifacts
+    notes = f"{'Baseline' if grid == 1 else f'{grid}x{grid} permuted'}, {meta['input_size']}x{meta['input_size']}, ImageNet norm"
     save_run(
         results_root=out_path,
         model_name=model_name,
@@ -242,7 +252,8 @@ def train_model(
         meta=meta,
         hyper={"epochs": epochs, "batch_size": batch_size, "lr": lr, "wd": wd,
                "optimizer": "AdamW", "dropout": dropout},
-        notes="Baseline, 224x224, ImageNet norm"
+        notes=notes,
+        permutation=permutation
     )
 
     save_preds(
@@ -252,7 +263,7 @@ def train_model(
         split="val",
         model=model,
         loader=val_loader,
-        device=device,
+        device=str(device),
     )
 
     if os.path.exists(best_tmp_path):
