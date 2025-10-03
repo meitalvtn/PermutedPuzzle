@@ -1,8 +1,9 @@
 import math
 import os
 from PIL import Image
+import torch
 from torch.utils.data import Dataset
-from torch.utils.data import DataLoader, random_split
+from torch.utils.data import DataLoader, Subset
 
 
 from permuted_puzzle.transforms import permute_image_tensor
@@ -54,17 +55,25 @@ class PermutedDogsVsCatsDataset(Dataset):
 
 
 def get_dataloaders(img_dir, train_tfms, val_tfms, batch_size=64, val_split=0.2):
+    # Get dataset size
     full_dataset = DogsVsCatsDataset(img_dir, transform=None)
     n_total = len(full_dataset)
     n_val = math.floor(val_split * n_total)
     n_train = n_total - n_val
 
-    # Split
-    train_ds, val_ds = random_split(full_dataset, [n_train, n_val])
+    # Generate random permutation of indices (reproducible with seed=0)
+    torch.manual_seed(0)
+    indices = torch.randperm(n_total).tolist()
+    train_indices = indices[:n_train]
+    val_indices = indices[n_train:]
 
-    # Re-wrap with transforms
-    train_ds.dataset.transform = train_tfms
-    val_ds.dataset.transform = val_tfms
+    # Create two independent base datasets with transforms
+    train_base = DogsVsCatsDataset(img_dir, transform=train_tfms)
+    val_base = DogsVsCatsDataset(img_dir, transform=val_tfms)
+
+    # Subset them with the split indices
+    train_ds = Subset(train_base, train_indices)
+    val_ds = Subset(val_base, val_indices)
 
     # DataLoaders
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=2)

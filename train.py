@@ -5,6 +5,9 @@ import random
 from pathlib import Path
 
 import logging, sys
+
+from torch.utils.data import DataLoader
+
 logging.basicConfig(level=logging.INFO, stream=sys.stdout, format="%(message)s", force=True)
 logger = logging.getLogger("train")
 logger.setLevel(logging.INFO)
@@ -114,26 +117,37 @@ def train_model(
             data_path, train_tfms, val_tfms, batch_size=batch_size
         )
     else:
-        logger.info(f"Loading data with permutation (grid {grid}x{grid})...")
-        full_dataset = DogsVsCatsDataset(data_path, transform=None)
+        # Split indices once (reproducible with seed=0)
+        full_dataset = DogsVsCatsDataset(data_path)  # just for length
         n_val = math.floor(0.2 * len(full_dataset))
         n_train = len(full_dataset) - n_val
-        train_subset, val_subset = torch.utils.data.random_split(full_dataset, [n_train, n_val])
 
-        train_subset.dataset.transform = train_tfms
-        val_subset.dataset.transform = val_tfms
+        # Generate random permutation of indices
+        torch.manual_seed(0)
+        indices = torch.randperm(len(full_dataset)).tolist()
+        train_indices = indices[:n_train]
+        val_indices = indices[n_train:]
 
+        # Create two independent base datasets with transforms
+        train_base = DogsVsCatsDataset(data_path, transform=train_tfms)
+        val_base = DogsVsCatsDataset(data_path, transform=val_tfms)
+
+        # Subset them with the split indices
+        train_subset = torch.utils.data.Subset(train_base, train_indices)
+        val_subset = torch.utils.data.Subset(val_base, val_indices)
+
+        # Apply permutation wrapper
         N = grid * grid
-        fixed_perm = list(range(N))
         random.seed(0)
+        fixed_perm = list(range(N))
         random.shuffle(fixed_perm)
-        logger.info(f"Fixed permutation (seed=0): {fixed_perm}")
 
         train_ds = PermutedDogsVsCatsDataset(train_subset, grid_size=grid, permutation=fixed_perm)
         val_ds = PermutedDogsVsCatsDataset(val_subset, grid_size=grid, permutation=fixed_perm)
 
-        train_loader = torch.utils.data.DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=2)
-        val_loader = torch.utils.data.DataLoader(val_ds, batch_size=batch_size, shuffle=False, num_workers=2)
+        # Loaders
+        train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=2)
+        val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False, num_workers=2)
 
     logger.info(f"Train samples: {len(train_loader.dataset)}, Val samples: {len(val_loader.dataset)}\n")
 
