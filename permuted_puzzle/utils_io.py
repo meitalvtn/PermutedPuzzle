@@ -37,11 +37,19 @@ def save_run(
     hyper: dict,
     notes: str = "",
     permutation: Optional[list] = None,
+    split_indices: Optional[dict] = None,
+    permutations: Optional[dict] = None,
 ) -> dict:
     """
     Saves into: {results_root}/
       - best.pth
       - metrics.json
+
+    Args:
+        ...
+        permutation: Legacy - train permutation (use permutations instead)
+        split_indices: Dict with 'train', 'val', 'test' indices as lists
+        permutations: Dict with 'train', 'val', 'test' permutations
     """
     run_dir = Path(results_root)
     _ensure_dir(run_dir)
@@ -72,8 +80,18 @@ def save_run(
         "metrics_relpath": metrics_relpath,
     }
 
-    # add permutation if provided
-    if permutation is not None:
+    # Add split indices if provided (convert numpy arrays to lists)
+    if split_indices is not None:
+        metrics["split_indices"] = {
+            k: v.tolist() if hasattr(v, 'tolist') else list(v)
+            for k, v in split_indices.items()
+        }
+
+    # Add permutations (new format)
+    if permutations is not None:
+        metrics["permutations"] = permutations
+    # Legacy support: single permutation
+    elif permutation is not None:
         metrics["permutation"] = permutation
 
     _atomic_write_json(metrics_path, metrics)

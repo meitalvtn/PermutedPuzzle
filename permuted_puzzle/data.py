@@ -1,6 +1,9 @@
 import math
 import os
+import random
+from typing import Dict, List, Optional
 from PIL import Image
+import numpy as np
 import torch
 from torch.utils.data import Dataset
 from torch.utils.data import DataLoader, Subset
@@ -54,28 +57,118 @@ class PermutedDogsVsCatsDataset(Dataset):
         return permuted_image, label
 
 
-def get_dataloaders(img_dir, train_tfms, val_tfms, batch_size=64, val_split=0.2):
-    # Get dataset size
-    full_dataset = DogsVsCatsDataset(img_dir, transform=None)
-    n_total = len(full_dataset)
-    n_val = math.floor(val_split * n_total)
-    n_train = n_total - n_val
+def split_indices(
+    n_samples: int,
+    splits: List[float],
+    seed: int = 0
+) -> Dict[str, np.ndarray]:
+    """
+    Split dataset indices into multiple sets (e.g., train/val/test).
 
-    # Generate random permutation of indices (reproducible, seed set in train_model)
-    indices = torch.randperm(n_total).tolist()
-    train_indices = indices[:n_train]
-    val_indices = indices[n_train:]
+    Args:
+        n_samples: Total number of samples
+        splits: List of split ratios (must sum to 1.0), e.g., [0.6, 0.2, 0.2]
+        seed: Random seed for reproducibility
 
-    # Create two independent base datasets with transforms
-    train_base = DogsVsCatsDataset(img_dir, transform=train_tfms)
-    val_base = DogsVsCatsDataset(img_dir, transform=val_tfms)
+    Returns:
+        Dict mapping split names to index arrays, e.g.,
+        {'train': array([...]), 'val': array([...]), 'test': array([...])}
+    """
+    if not math.isclose(sum(splits), 1.0, rel_tol=1e-5):
+        raise ValueError(f"Splits must sum to 1.0, got {sum(splits)}")
 
-    # Subset them with the split indices
-    train_ds = Subset(train_base, train_indices)
-    val_ds = Subset(val_base, val_indices)
+    # Generate shuffled indices
+    torch.manual_seed(seed)
+    indices = torch.randperm(n_samples).numpy()
 
-    # DataLoaders
-    train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=2)
-    val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False, num_workers=2)
+    # Split indices
+    split_names = ['train', 'val', 'test'][:len(splits)]
+    result = {}
+    start = 0
 
-    return train_loader, val_loader
+    for i, (name, ratio) in enumerate(zip(split_names, splits)):
+        if i == len(splits) - 1:
+            # Last split gets all remaining samples
+            result[name] = indices[start:]
+        else:
+            count = int(n_samples * ratio)
+            result[name] = indices[start:start + count]
+            start += count
+
+    return result
+
+
+def generate_permutation(grid_size: int, seed: int) -> List[int]:
+    """
+    Generate deterministic NxN tile permutation.
+
+    Args:
+        grid_size: Grid dimension (N for NxN grid)
+        seed: Random seed for reproducibility
+
+    Returns:
+        List of length grid_size^2 representing tile permutation
+    """
+    random.seed(seed)
+    n_tiles = grid_size * grid_size
+    perm = list(range(n_tiles))
+    random.shuffle(perm)
+    return perm
+
+
+def create_loader(
+    dataset: Dataset,
+    indices: np.ndarray,
+    transform,
+    permutation: Optional[List[int]] = None,
+    grid_size: int = 1,
+    batch_size: int = 64,
+    shuffle: bool = False,
+    num_workers: int = 0
+) -> DataLoader:
+    """
+    Create DataLoader from dataset subset with optional permutation.
+
+    Args:
+        dataset: Base dataset (DogsVsCatsDataset)
+        indices: Indices to include in this loader
+        transform: Torchvision transforms to apply
+        permutation: Optional tile permutation (if None, no permutation applied)
+        grid_size: Grid dimension for permutation (only used if permutation is not None)
+        batch_size: Batch size
+        shuffle: Whether to shuffle data
+        num_workers: Number of worker processes
+
+    Returns:
+        DataLoader with optional permutation applied
+    """
+    # Create dataset with transform
+    # Check if dataset has img_dir attribute (DogsVsCatsDataset)
+    if hasattr(dataset, 'img_dir'):
+        dataset_with_transform = type(dataset)(dataset.img_dir, transform=transform)
+    else:
+        # For other dataset types, assume they accept transform in constructor
+        try:
+            dataset_with_transform = type(dataset)(transform=transform)
+        except TypeError:
+            raise TypeError(
+                f"create_loader requires dataset to either have 'img_dir' attribute "
+                f"or accept 'transform' parameter. Got {type(dataset).__name__}"
+            )
+
+    # Subset to specified indices
+    subset = Subset(dataset_with_transform, indices.tolist())
+
+    # Apply permutation if specified
+    if permutation is not None:
+        subset = PermutedDogsVsCatsDataset(subset, grid_size=grid_size, permutation=permutation)
+
+    # Create DataLoader
+    loader = DataLoader(
+        subset,
+        batch_size=batch_size,
+        shuffle=shuffle,
+        num_workers=num_workers
+    )
+
+    return loader

@@ -1,6 +1,6 @@
 # CNN Permutation Analysis Library
 
-## 📜 Philosophy & Purpose
+## Philosophy & Purpose
 
 I've structured this repository to serve as a **professional-grade library** for your M.Sc. research project. 
 Think of this not as a collection of scripts, but as a robust toolkit. 
@@ -12,7 +12,7 @@ This discipline is what separates a student project from professional, impactful
 
 ---
 
-## 🏛️ Core Architectural Principles
+## Core Architectural Principles
 
 For this library to be successful, we will adhere strictly to the following principles. This is non-negotiable.
 
@@ -20,3 +20,5 @@ For this library to be successful, we will adhere strictly to the following prin
 * **Configuration-Driven Experiments**: We will **never** hardcode parameters like learning rates, tile resolutions, or model names into the training scripts. All experiments must be defined and driven by external configuration files (e.g., YAML or JSON) or command-line arguments. This ensures perfect reproducibility and makes it trivial to launch new experimental variations.
 * **Robustness and Predictability**: Your code must be resilient. Functions should be pure (i.e., have no side effects) whenever possible. We need to trust that calling `create_permutation(n=9, seed=42)` will return the exact same permutation every single time. This is the foundation of reliable science.
 * **Strict Documentation and Typing**: Code is read far more often than it is written. Every function must have a clear docstring explaining what it does, its parameters, and what it returns. Use Python's type hints (`str`, `int`, `np.ndarray`) for all function signatures. This makes the library self-documenting and easier to debug.
+
+*NEVER USE EMOJIS IN CODE!!! This is unprofessional*

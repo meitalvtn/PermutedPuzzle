@@ -1,12 +1,18 @@
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 import os
-import math
-import random
 from pathlib import Path
 
-import logging, sys
+import logging
+import sys
 
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.cuda.amp import GradScaler, autocast
 from torch.utils.data import DataLoader
+import torchvision
+import matplotlib.pyplot as plt
 
 logging.basicConfig(level=logging.INFO, stream=sys.stdout, format="%(message)s", force=True)
 logger = logging.getLogger("train")
@@ -16,52 +22,104 @@ _handler = logging.StreamHandler(sys.stdout)
 _handler.setFormatter(logging.Formatter("%(message)s"))
 logger.handlers = [_handler]
 
-import numpy as np
-import torch
-import torch.nn as nn
-import torch.optim as optim
-from torch.cuda.amp import GradScaler, autocast
-import torchvision
-import matplotlib.pyplot as plt
-
-from permuted_puzzle.models import REGISTRY
-from permuted_puzzle.transforms import baseline_train_transforms, baseline_val_transforms
-from permuted_puzzle.data import get_dataloaders, DogsVsCatsDataset, PermutedDogsVsCatsDataset
 from permuted_puzzle.utils_io import save_run, save_preds
 
 
-def train_model(
-    model_name: str,
-    data_path: str,
-    out_path: str = "results",
-    grid: int = 1,
-    epochs: int = 10,
-    batch_size: int = 64,
-    lr: float = 1e-4,
-    wd: float = 1e-4,
-    dropout: float = 0.2,
-    pretrained: bool = False,
-) -> Dict[str, Any]:
+def evaluate_model(
+    model: nn.Module,
+    loader: DataLoader,
+    device: str = "cuda",
+    criterion = None
+) -> Dict[str, float]:
     """
-    Train a classification model on Dogs vs Cats, optionally with grid permutations.
+    Evaluate model on a data loader.
+
+    Args:
+        model: PyTorch model
+        loader: DataLoader to evaluate on
+        device: Device to use ('cuda' or 'cpu')
+        criterion: Loss function (if None, uses CrossEntropyLoss)
 
     Returns:
-        dict containing training history, best accuracy, and model
+        Dict with 'loss' and 'accuracy' keys
     """
+    if criterion is None:
+        criterion = nn.CrossEntropyLoss()
 
-    # Reproducibility
-    torch.manual_seed(0)
-    random.seed(0)
-    np.random.seed(0)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(0)
+    device_obj = torch.device(device)
+    model = model.to(device_obj)
+    model.eval()
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    total_loss, correct, total = 0, 0, 0
 
-    # 1. Build model
-    build_fn = REGISTRY[model_name]
-    model, meta = build_fn(num_classes=2, pretrained=pretrained, dropout=dropout)
-    model = model.to(device)
+    with torch.no_grad():
+        for images, labels in loader:
+            images, labels = images.to(device_obj), labels.to(device_obj)
+            outputs = model(images)
+            loss = criterion(outputs, labels)
+            total_loss += loss.item() * images.size(0)
+            correct += (outputs.argmax(1) == labels).sum().item()
+            total += labels.size(0)
+
+    return {
+        'loss': total_loss / total,
+        'accuracy': correct / total
+    }
+
+
+def train_model(
+    model: nn.Module,
+    train_loader: DataLoader,
+    val_loader: DataLoader,
+    epochs: int = 10,
+    lr: float = 1e-4,
+    weight_decay: float = 1e-4,
+    device: str = "cuda",
+    out_path: Optional[str] = None,
+    config: Optional[Dict] = None,
+) -> Dict[str, Any]:
+    """
+    Train a classification model.
+
+    Args:
+        model: PyTorch model to train
+        train_loader: Training data loader
+        val_loader: Validation data loader
+        epochs: Number of training epochs
+        lr: Learning rate
+        weight_decay: Weight decay for optimizer
+        device: Device to use ('cuda' or 'cpu')
+        out_path: Path to save outputs (checkpoints, metrics, predictions)
+        config: Optional config dict for logging (can include model_name, permutations, etc.)
+
+    Returns:
+        Dict containing:
+            - 'history': Training history with train/val losses and accuracies
+            - 'best_val_acc': Best validation accuracy achieved
+            - 'best_epoch': Epoch with best validation accuracy
+            - 'model': Trained model (with best checkpoint loaded)
+    """
+    device_obj = torch.device(device)
+    model = model.to(device_obj)
+
+    # Extract config values
+    config = config or {}
+    model_name = config.get('model_name', 'model')
+    grid_size = config.get('grid_size', 1)
+    train_perm = config.get('train_permutation')
+    val_perm = config.get('val_permutation')
+    test_perm = config.get('test_permutation')
+    split_indices = config.get('split_indices')
+    meta = config.get('meta', {'input_size': 224, 'mean': [0.485, 0.456, 0.406], 'std': [0.229, 0.224, 0.225]})
+
+    # Build permutations dict for saving
+    permutations = {}
+    if train_perm is not None:
+        permutations['train'] = train_perm
+    if val_perm is not None:
+        permutations['val'] = val_perm
+    if test_perm is not None:
+        permutations['test'] = test_perm
 
     # === Training configuration logs ===
     logger.info("\n" + "=" * 80)
@@ -70,93 +128,38 @@ def train_model(
     logger.info("")
     logger.info("MODEL")
     logger.info(f"  Architecture:        {model_name}")
-    logger.info(f"  Pretrained:          {pretrained}")
-    logger.info(f"  Number of Classes:   2 (Dogs vs Cats)")
-    logger.info(f"  Dropout:             {dropout}")
+    logger.info(f"  Number of Classes:   {config.get('num_classes', 2)}")
     logger.info(f"  Input Size:          {meta['input_size']}")
     logger.info(f"  Normalization:       Mean={meta['mean']}, Std={meta['std']}")
     logger.info("")
     logger.info("DATA")
-    logger.info(f"  Data Path:           {data_path}")
-    logger.info(f"  Grid Size:           {grid}x{grid} {'(baseline - no permutation)' if grid == 1 else f'({grid**2} tiles)'}")
-    logger.info(f"  Train/Val Split:     80/20")
-    logger.info(f"  Batch Size:          {batch_size}")
-    logger.info(f"  Num Workers:         2")
-    logger.info(f"  Shuffle Train:       True")
-    logger.info(f"  Shuffle Val:         False")
+    logger.info(f"  Train Samples:       {len(train_loader.dataset)}")
+    logger.info(f"  Val Samples:         {len(val_loader.dataset)}")
+    logger.info(f"  Batch Size:          {train_loader.batch_size}")
+    logger.info(f"  Grid Size:           {grid_size}x{grid_size}")
+    if train_perm:
+        logger.info(f"  Train Permutation:   {train_perm}")
+    if val_perm and val_perm != train_perm:
+        logger.info(f"  Val Permutation:     {val_perm}")
     logger.info("")
     logger.info("TRAINING")
     logger.info(f"  Epochs:              {epochs}")
     logger.info(f"  Optimizer:           AdamW")
     logger.info(f"  Learning Rate:       {lr}")
-    logger.info(f"  Weight Decay:        {wd}")
+    logger.info(f"  Weight Decay:        {weight_decay}")
     logger.info(f"  Loss Function:       CrossEntropyLoss")
-    logger.info(f"  Mixed Precision:     Enabled (GradScaler)")
-    logger.info(f"  Random Seed:         0")
-    logger.info("")
-    logger.info("OUTPUT")
-    logger.info(f"  Output Path:         {out_path}")
-    logger.info(f"  Save Predictions:    True")
-    logger.info(f"  Save Visualizations: True")
+    logger.info(f"  Mixed Precision:     {'Enabled (GradScaler)' if torch.cuda.is_available() else 'Disabled (CPU)'}")
     logger.info("")
     logger.info("DEVICE")
-    logger.info(f"  Device:              {device}")
+    logger.info(f"  Device:              {device_obj}")
     if torch.cuda.is_available():
         logger.info(f"  GPU Name:            {torch.cuda.get_device_name(0)}")
         logger.info(f"  GPU Memory:          {torch.cuda.get_device_properties(0).total_memory / 1e9:.2f} GB")
     logger.info("=" * 80 + "\n")
 
-    # 2. Transforms
-    train_tfms = baseline_train_transforms(meta["input_size"], meta["mean"], meta["std"])
-    val_tfms = baseline_val_transforms(meta["input_size"], meta["mean"], meta["std"])
-
-    # 3. Data
-    permutation = None
-    if grid == 1:
-        logger.info("Loading baseline data (no permutation)...")
-        train_loader, val_loader = get_dataloaders(
-            data_path, train_tfms, val_tfms, batch_size=batch_size
-        )
-    else:
-        # Split indices once (reproducible)
-        full_dataset = DogsVsCatsDataset(data_path)  # just for length
-        n_val = math.floor(0.2 * len(full_dataset))
-        n_train = len(full_dataset) - n_val
-
-        # Generate random permutation of indices
-        indices = torch.randperm(len(full_dataset)).tolist()
-        train_indices = indices[:n_train]
-        val_indices = indices[n_train:]
-
-        # Create two independent base datasets with transforms
-        train_base = DogsVsCatsDataset(data_path, transform=train_tfms)
-        val_base = DogsVsCatsDataset(data_path, transform=val_tfms)
-
-        # Subset them with the split indices
-        train_subset = torch.utils.data.Subset(train_base, train_indices)
-        val_subset = torch.utils.data.Subset(val_base, val_indices)
-
-        # Apply permutation wrapper (seed set at top of function)
-        N = grid * grid
-        fixed_perm = list(range(N))
-        random.shuffle(fixed_perm)
-        logger.info(f"Fixed permutation (seed=0): {fixed_perm}")
-
-        permutation = fixed_perm  # Save for metrics
-
-        train_ds = PermutedDogsVsCatsDataset(train_subset, grid_size=grid, permutation=fixed_perm)
-        val_ds = PermutedDogsVsCatsDataset(val_subset, grid_size=grid, permutation=fixed_perm)
-
-        # Loaders
-        train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=2)
-        val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False, num_workers=2)
-
-    logger.info(f"Train samples: {len(train_loader.dataset)}, Val samples: {len(val_loader.dataset)}\n")
-
-    # Sanity check
+    # Visualize sample batch
     logger.info("--- RUNNING VISUALIZATION CHECK ---")
     data_batch, labels_batch = next(iter(train_loader))
-    logger.info(f"Grid size for this run: {grid}")
     logger.info(f"Shape of a single image tensor: {data_batch[0].shape}")
     grid_img = torchvision.utils.make_grid(data_batch[:4], nrow=4)
     mean, std = np.array(meta['mean']), np.array(meta['std'])
@@ -164,31 +167,34 @@ def train_model(
     grid_img = std * grid_img + mean
     grid_img = np.clip(grid_img, 0, 1)
     plt.figure(figsize=(10, 10))
-    plt.title("Are these images scrambled?")
+    plt.title(f"Sample Training Images (Grid {grid_size}x{grid_size})")
     plt.imshow(grid_img)
     plt.axis("off")
     plt.show()
 
-    # 4. Training setup
+    # Training setup
     logger.info("\n=== Starting Training ===")
     criterion = nn.CrossEntropyLoss()
-    optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=wd)
+    optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
     scaler = GradScaler() if torch.cuda.is_available() else None
-    logger.info(f"Optimizer: AdamW (lr={lr}, wd={wd})")
-    logger.info(f"Criterion: CrossEntropyLoss")
-    logger.info(f"Mixed Precision: {'Enabled (GradScaler)' if scaler else 'Disabled (CPU)'}\n")
+    logger.info(f"Optimizer: AdamW (lr={lr}, wd={weight_decay})")
+    logger.info(f"Criterion: CrossEntropyLoss\n")
 
     history = {"train_loss": [], "train_acc": [], "val_loss": [], "val_acc": []}
     best_val_acc, best_epoch = 0.0, -1
 
-    Path(out_path).mkdir(parents=True, exist_ok=True)
-    best_tmp_path = os.path.join(out_path, f"{model_name}_best_tmp.pth")
+    # Create output directory and temp checkpoint path
+    if out_path:
+        Path(out_path).mkdir(parents=True, exist_ok=True)
+        best_tmp_path = os.path.join(out_path, f"{model_name}_best_tmp.pth")
+    else:
+        best_tmp_path = None
 
     def train_one_epoch(model, loader):
         model.train()
         total_loss, correct, total = 0, 0, 0
         for images, labels in loader:
-            images, labels = images.to(device), labels.to(device)
+            images, labels = images.to(device_obj), labels.to(device_obj)
             optimizer.zero_grad()
             if scaler:
                 with autocast():
@@ -207,69 +213,74 @@ def train_model(
             total += labels.size(0)
         return total_loss / total, correct / total
 
-    def evaluate(model, loader):
-        model.eval()
-        total_loss, correct, total = 0, 0, 0
-        with torch.no_grad():
-            for images, labels in loader:
-                images, labels = images.to(device), labels.to(device)
-                outputs = model(images)
-                loss = criterion(outputs, labels)
-                total_loss += loss.item() * images.size(0)
-                correct += (outputs.argmax(1) == labels).sum().item()
-                total += labels.size(0)
-        return total_loss / total, correct / total
-
+    # Training loop
     for epoch in range(epochs):
         train_loss, train_acc = train_one_epoch(model, train_loader)
-        val_loss, val_acc = evaluate(model, val_loader)
+        val_metrics = evaluate_model(model, val_loader, device=device, criterion=criterion)
+
         history["train_loss"].append(float(train_loss))
         history["train_acc"].append(float(train_acc))
-        history["val_loss"].append(float(val_loss))
-        history["val_acc"].append(float(val_acc))
+        history["val_loss"].append(float(val_metrics['loss']))
+        history["val_acc"].append(float(val_metrics['accuracy']))
 
         logger.info(f"Epoch {epoch+1}/{epochs}: "
                     f"Train Loss={train_loss:.4f}, Train Acc={train_acc:.4f}, "
-                    f"Val Loss={val_loss:.4f}, Val Acc={val_acc:.4f}")
+                    f"Val Loss={val_metrics['loss']:.4f}, Val Acc={val_metrics['accuracy']:.4f}")
 
-        if val_acc > best_val_acc:
-            best_val_acc, best_epoch = val_acc, epoch + 1
-            torch.save(model.state_dict(), best_tmp_path)
+        if val_metrics['accuracy'] > best_val_acc:
+            best_val_acc, best_epoch = val_metrics['accuracy'], epoch + 1
+            if best_tmp_path:
+                torch.save(model.state_dict(), best_tmp_path)
 
-    if os.path.exists(best_tmp_path):
-        model.load_state_dict(torch.load(best_tmp_path, map_location=device))
+    # Load best checkpoint
+    if best_tmp_path and os.path.exists(best_tmp_path):
+        model.load_state_dict(torch.load(best_tmp_path, map_location=device_obj))
 
     logger.info(f"\nBest Val Accuracy: {best_val_acc:.4f} at epoch {best_epoch}\n")
 
-    # Save run artifacts
-    notes = f"{'Baseline' if grid == 1 else f'{grid}x{grid} permuted'}, {meta['input_size']}x{meta['input_size']}, ImageNet norm"
-    save_run(
-        results_root=out_path,
-        model_name=model_name,
-        grid_size=grid,
-        model=model,
-        history=history,
-        meta=meta,
-        hyper={"epochs": epochs, "batch_size": batch_size, "lr": lr, "wd": wd,
-               "optimizer": "AdamW", "dropout": dropout},
-        notes=notes,
-        permutation=permutation
-    )
+    # Save outputs
+    if out_path:
+        notes = f"{'Baseline' if grid_size == 1 else f'{grid_size}x{grid_size} permuted'}, {meta['input_size']}x{meta['input_size']}, ImageNet norm"
+        save_run(
+            results_root=out_path,
+            model_name=model_name,
+            grid_size=grid_size,
+            model=model,
+            history=history,
+            meta=meta,
+            hyper={
+                "epochs": epochs,
+                "batch_size": train_loader.batch_size,
+                "lr": lr,
+                "wd": weight_decay,
+                "optimizer": "AdamW",
+                "dropout": config.get('dropout', 0.2)
+            },
+            notes=notes,
+            split_indices=split_indices,
+            permutations=permutations if permutations else None
+        )
 
-    save_preds(
-        results_root=out_path,
-        model_name=model_name,
-        grid_size=grid,
-        split="val",
-        model=model,
-        loader=val_loader,
-        device=str(device),
-    )
+        save_preds(
+            results_root=out_path,
+            model_name=model_name,
+            grid_size=grid_size,
+            split="val",
+            model=model,
+            loader=val_loader,
+            device=str(device_obj),
+        )
 
-    if os.path.exists(best_tmp_path):
-        os.remove(best_tmp_path)
-        logger.info(f"Removed temp checkpoint: {best_tmp_path}")
+        # Clean up temp checkpoint
+        if best_tmp_path and os.path.exists(best_tmp_path):
+            os.remove(best_tmp_path)
+            logger.info(f"Removed temp checkpoint: {best_tmp_path}")
 
-    logger.info(f"Saved outputs under: {out_path}")
+        logger.info(f"Saved outputs under: {out_path}")
 
-    return {"history": history, "best_val_acc": best_val_acc, "best_epoch": best_epoch, "model": model}
+    return {
+        "history": history,
+        "best_val_acc": best_val_acc,
+        "best_epoch": best_epoch,
+        "model": model
+    }
