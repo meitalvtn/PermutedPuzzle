@@ -13,7 +13,7 @@ from permuted_puzzle.data import (
 )
 from permuted_puzzle.models import build_model, get_model_config
 from permuted_puzzle.transforms import baseline_train_transforms, baseline_val_transforms
-from train import train_model, evaluate_model
+from permuted_puzzle.train_utils import train_model, evaluate_model
 
 
 def prepare_dataset(root="test_data"):

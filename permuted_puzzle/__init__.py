@@ -28,7 +28,7 @@ from .transforms import (
 )
 
 # Training utilities
-from train import (
+from .train_utils import (
     train_model,
     evaluate_model,
 )
