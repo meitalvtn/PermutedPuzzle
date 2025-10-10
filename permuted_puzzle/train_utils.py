@@ -128,6 +128,7 @@ def train_model(
     logger.info("")
     logger.info("MODEL")
     logger.info(f"  Architecture:        {model_name}")
+    logger.info(f"  Pretrained:          {config.get('pretrained', 'Not specified')}")
     logger.info(f"  Number of Classes:   {config.get('num_classes', 2)}")
     logger.info(f"  Input Size:          {meta['input_size']}")
     logger.info(f"  Normalization:       Mean={meta['mean']}, Std={meta['std']}")
@@ -254,7 +255,8 @@ def train_model(
                 "lr": lr,
                 "wd": weight_decay,
                 "optimizer": "AdamW",
-                "dropout": config.get('dropout', 0.2)
+                "dropout": config.get('dropout', 0.2),
+                "pretrained": config.get('pretrained', True)
             },
             notes=notes,
             split_indices=split_indices,
