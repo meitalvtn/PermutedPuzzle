@@ -12,6 +12,53 @@ from torchvision import transforms
 from permuted_puzzle.transforms import permute_image_tensor
 
 
+def add_tile_border(image_tensor, grid_size, tile_idx, border_width=3):
+    """
+    Add a red border around a specific tile for visualization.
+
+    Args:
+        image_tensor: torch.Tensor of shape (C, H, W)
+        grid_size: number of tiles per dimension (N)
+        tile_idx: index of tile to highlight (0 to N²-1)
+        border_width: width of border in pixels (default 3)
+
+    Returns:
+        torch.Tensor with red border added around specified tile
+    """
+    img = image_tensor.clone()
+    C, H, W = img.shape
+    tile_h, tile_w = H // grid_size, W // grid_size
+
+    # Calculate position of tile
+    row = tile_idx // grid_size
+    col = tile_idx % grid_size
+
+    # Calculate tile boundaries
+    y1, y2 = row * tile_h, (row + 1) * tile_h
+    x1, x2 = col * tile_w, (col + 1) * tile_w
+
+    # Add red border (only for RGB images)
+    if C >= 3:
+        # Top border
+        img[0, y1:y1+border_width, x1:x2] = 1.0
+        img[1, y1:y1+border_width, x1:x2] = 0.0
+        img[2, y1:y1+border_width, x1:x2] = 0.0
+        # Bottom border
+        img[0, y2-border_width:y2, x1:x2] = 1.0
+        img[1, y2-border_width:y2, x1:x2] = 0.0
+        img[2, y2-border_width:y2, x1:x2] = 0.0
+        # Left border
+        img[0, y1:y2, x1:x1+border_width] = 1.0
+        img[1, y1:y2, x1:x1+border_width] = 0.0
+        img[2, y1:y2, x1:x1+border_width] = 0.0
+        # Right border
+        img[0, y1:y2, x2-border_width:x2] = 1.0
+        img[1, y1:y2, x2-border_width:x2] = 0.0
+        img[2, y1:y2, x2-border_width:x2] = 0.0
+
+    return img
+
+
 def load_image_as_tensor(image_path):
     """Load an image and convert to tensor."""
     img = Image.open(image_path).convert('RGB')
@@ -48,6 +95,7 @@ def visualize_permutations(image_path, grid_sizes=[2, 3, 4], seed=42):
     # Show permuted versions
     for idx, grid_size in enumerate(grid_sizes, start=1):
         torch.manual_seed(seed)
+        # No permutation provided, so grid_size is required
         permuted = permute_image_tensor(img_tensor, grid_size=grid_size)
 
         axes[idx].imshow(tensor_to_numpy(permuted))
@@ -73,9 +121,11 @@ def visualize_specific_permutation(image_path, grid_size=3, permutation=None):
     img_tensor = load_image_as_tensor(image_path)
 
     # Apply permutation
-    if permutation is not None:
+    if permutation is None:
         torch.manual_seed(42)  # For consistent random if None
-    permuted = permute_image_tensor(img_tensor, grid_size=grid_size, permutation=permutation)
+        permuted = permute_image_tensor(img_tensor, grid_size=grid_size)
+    else:
+        permuted = permute_image_tensor(img_tensor, permutation=permutation)
 
     # Create figure
     fig, axes = plt.subplots(1, 2, figsize=(12, 6))
@@ -108,44 +158,23 @@ def visualize_tile_tracking(image_path, grid_size=3, permutation=None, highlight
     # Load image
     img_tensor = load_image_as_tensor(image_path)
 
-    # Apply permutation WITH highlighting
-    permuted = permute_image_tensor(img_tensor, grid_size=grid_size,
-                                   permutation=permutation,
-                                   highlight_tile_idx=highlight_tile_idx)
+    # Apply permutation
+    if permutation is None:
+        permuted = permute_image_tensor(img_tensor, grid_size=grid_size)
+    else:
+        permuted = permute_image_tensor(img_tensor, permutation=permutation)
 
-    # Also create version without highlighting for reference
-    original_with_border = permute_image_tensor(img_tensor, grid_size=1,
-                                                highlight_tile_idx=None)
+    # Add border to original image at tile position
+    img_highlighted = add_tile_border(img_tensor, grid_size, highlight_tile_idx)
 
-    # Add border to original for comparison
-    img_highlighted = img_tensor.clone()
-    C, H, W = img_tensor.shape
-    tile_h, tile_w = H // grid_size, W // grid_size
-    border_width = 3
-
-    # Calculate position of highlighted tile
-    row = highlight_tile_idx // grid_size
-    col = highlight_tile_idx % grid_size
-
-    # Add red border to that tile in original
-    y1, y2 = row * tile_h, (row + 1) * tile_h
-    x1, x2 = col * tile_w, (col + 1) * tile_w
-
-    img_highlighted[0, y1:y1+border_width, x1:x2] = 1.0  # Top
-    img_highlighted[1, y1:y1+border_width, x1:x2] = 0.0
-    img_highlighted[2, y1:y1+border_width, x1:x2] = 0.0
-
-    img_highlighted[0, y2-border_width:y2, x1:x2] = 1.0  # Bottom
-    img_highlighted[1, y2-border_width:y2, x1:x2] = 0.0
-    img_highlighted[2, y2-border_width:y2, x1:x2] = 0.0
-
-    img_highlighted[0, y1:y2, x1:x1+border_width] = 1.0  # Left
-    img_highlighted[1, y1:y2, x1:x1+border_width] = 0.0
-    img_highlighted[2, y1:y2, x1:x1+border_width] = 0.0
-
-    img_highlighted[0, y1:y2, x2-border_width:x2] = 1.0  # Right
-    img_highlighted[1, y1:y2, x2-border_width:x2] = 0.0
-    img_highlighted[2, y1:y2, x2-border_width:x2] = 0.0
+    # Add border to permuted image at new position
+    if permutation:
+        # Find where the highlighted tile ended up after permutation
+        new_position = permutation.index(highlight_tile_idx)
+        permuted = add_tile_border(permuted, grid_size, new_position)
+    else:
+        # No permutation, same position
+        permuted = add_tile_border(permuted, grid_size, highlight_tile_idx)
 
     # Create figure
     fig, axes = plt.subplots(1, 2, figsize=(12, 6))
@@ -190,40 +219,23 @@ def visualize_tile_tracking_multiple(image_paths, grid_size=3, permutation=None,
         # Load image
         img_tensor = load_image_as_tensor(image_path)
 
-        # Apply permutation WITH highlighting
-        permuted = permute_image_tensor(img_tensor, grid_size=grid_size,
-                                       permutation=permutation,
-                                       highlight_tile_idx=highlight_tile_idx)
+        # Apply permutation
+        if permutation is None:
+            permuted = permute_image_tensor(img_tensor, grid_size=grid_size)
+        else:
+            permuted = permute_image_tensor(img_tensor, permutation=permutation)
 
-        # Add border to original for comparison
-        img_highlighted = img_tensor.clone()
-        C, H, W = img_tensor.shape
-        tile_h, tile_w = H // grid_size, W // grid_size
-        border_width = 3
+        # Add border to original image at tile position
+        img_highlighted = add_tile_border(img_tensor, grid_size, highlight_tile_idx)
 
-        # Calculate position of highlighted tile
-        row = highlight_tile_idx // grid_size
-        col = highlight_tile_idx % grid_size
-
-        # Add red border to that tile in original
-        y1, y2 = row * tile_h, (row + 1) * tile_h
-        x1, x2 = col * tile_w, (col + 1) * tile_w
-
-        img_highlighted[0, y1:y1+border_width, x1:x2] = 1.0
-        img_highlighted[1, y1:y1+border_width, x1:x2] = 0.0
-        img_highlighted[2, y1:y1+border_width, x1:x2] = 0.0
-
-        img_highlighted[0, y2-border_width:y2, x1:x2] = 1.0
-        img_highlighted[1, y2-border_width:y2, x1:x2] = 0.0
-        img_highlighted[2, y2-border_width:y2, x1:x2] = 0.0
-
-        img_highlighted[0, y1:y2, x1:x1+border_width] = 1.0
-        img_highlighted[1, y1:y2, x1:x1+border_width] = 0.0
-        img_highlighted[2, y1:y2, x1:x1+border_width] = 0.0
-
-        img_highlighted[0, y1:y2, x2-border_width:x2] = 1.0
-        img_highlighted[1, y1:y2, x2-border_width:x2] = 0.0
-        img_highlighted[2, y1:y2, x2-border_width:x2] = 0.0
+        # Add border to permuted image at new position
+        if permutation:
+            # Find where the highlighted tile ended up after permutation
+            new_position = permutation.index(highlight_tile_idx)
+            permuted = add_tile_border(permuted, grid_size, new_position)
+        else:
+            # No permutation, same position
+            permuted = add_tile_border(permuted, grid_size, highlight_tile_idx)
 
         # Show original with highlighted tile
         axes[idx][0].imshow(tensor_to_numpy(img_highlighted))

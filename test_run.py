@@ -98,11 +98,11 @@ def example_2_single_permutation():
     # Create loaders with same permutation
     train_loader = create_loader(
         dataset, indices['train'], train_tfms,
-        permutation=perm, grid_size=3, batch_size=8, shuffle=True
+        permutation=perm, batch_size=8, shuffle=True
     )
     val_loader = create_loader(
         dataset, indices['val'], val_tfms,
-        permutation=perm, grid_size=3, batch_size=8
+        permutation=perm, batch_size=8
     )
 
     # Build and train
@@ -154,15 +154,15 @@ def example_3_transfer_test():
     # Create loaders
     train_loader = create_loader(
         dataset, indices['train'], train_tfms,
-        permutation=perm_a, grid_size=3, batch_size=8, shuffle=True
+        permutation=perm_a, batch_size=8, shuffle=True
     )
     val_loader = create_loader(
         dataset, indices['val'], val_tfms,
-        permutation=perm_a, grid_size=3, batch_size=8
+        permutation=perm_a, batch_size=8
     )
     test_loader = create_loader(
         dataset, indices['test'], val_tfms,
-        permutation=perm_b, grid_size=3, batch_size=8
+        permutation=perm_b, batch_size=8
     )
 
     # Build and train on PermA
@@ -226,11 +226,11 @@ def example_4_multiple_grids():
 
         train_loader = create_loader(
             dataset, indices['train'], train_tfms,
-            permutation=perm, grid_size=grid_size, batch_size=8, shuffle=True
+            permutation=perm, batch_size=8, shuffle=True
         )
         val_loader = create_loader(
             dataset, indices['val'], val_tfms,
-            permutation=perm, grid_size=grid_size, batch_size=8
+            permutation=perm, batch_size=8
         )
 
         model = build_model("resnet18", num_classes=2, pretrained=True, dropout=0.2)

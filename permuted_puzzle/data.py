@@ -13,6 +13,20 @@ from permuted_puzzle.transforms import permute_image_tensor
 
 
 class DogsVsCatsDataset(Dataset):
+    """
+    Dataset wrapper that applies a fixed or random N×N tile permutation.
+
+    Divides each input image into grid_size×grid_size tiles and reorders them
+    according to a provided or generated permutation.
+
+    Args:
+        base_dataset (Dataset): Underlying dataset to wrap (e.g., DogsVsCatsDataset).
+        grid_size (int): Number of tiles per image side.
+        permutation (list[int], optional): List of tile indices defining the permutation.
+
+    Returns:
+        (Tensor, int): Permuted image tensor and label.
+    """
     def __init__(self, img_dir, transform=None):
         self.img_dir = img_dir
         self.transform = transform
@@ -35,16 +49,39 @@ class DogsVsCatsDataset(Dataset):
         return image, label
 
 class PermutedDogsVsCatsDataset(Dataset):
-    def __init__(self, base_dataset, grid_size=2, permutation=None):
+    """
+    Dataset wrapper that applies a fixed N×N tile permutation.
+
+    Divides each input image into grid_size×grid_size tiles and reorders them
+    according to the provided permutation. Grid size is automatically inferred
+    from the permutation length.
+
+    Args:
+        base_dataset (Dataset): Underlying dataset to wrap (e.g., DogsVsCatsDataset).
+        permutation (list[int]): List of tile indices defining the permutation.
+                                Length must be a perfect square (N²).
+
+    Returns:
+        (Tensor, int): Permuted image tensor and label.
+    """
+    def __init__(self, base_dataset, permutation):
         """
         Args:
             base_dataset: original DogsVsCatsDataset
-            grid_size: NxN tile grid to permute
-            permutation: fixed tile permutation (list of length N*N), or None for random
+            permutation: fixed tile permutation (list of length N*N)
         """
+        if permutation is None:
+            raise ValueError("permutation is required for PermutedDogsVsCatsDataset")
+
         self.base_dataset = base_dataset
-        self.grid_size = grid_size
         self.permutation = permutation
+
+        # Validate and infer grid_size from permutation
+        n_tiles = len(permutation)
+        grid_size = int(n_tiles ** 0.5)
+        if grid_size * grid_size != n_tiles:
+            raise ValueError(f"Permutation length must be a perfect square, got {n_tiles}")
+        self.grid_size = grid_size
 
     def __len__(self):
         return len(self.base_dataset)
@@ -52,7 +89,7 @@ class PermutedDogsVsCatsDataset(Dataset):
     def __getitem__(self, idx):
         image, label = self.base_dataset[idx]
         permuted_image = permute_image_tensor(
-            image, grid_size=self.grid_size, permutation=self.permutation
+            image, permutation=self.permutation
         )
         return permuted_image, label
 
@@ -121,7 +158,6 @@ def create_loader(
     indices: np.ndarray,
     transform,
     permutation: Optional[List[int]] = None,
-    grid_size: int = 1,
     batch_size: int = 64,
     shuffle: bool = False,
     num_workers: int = 0
@@ -133,8 +169,8 @@ def create_loader(
         dataset: Base dataset (DogsVsCatsDataset)
         indices: Indices to include in this loader
         transform: Torchvision transforms to apply
-        permutation: Optional tile permutation (if None, no permutation applied)
-        grid_size: Grid dimension for permutation (only used if permutation is not None)
+        permutation: Optional tile permutation (if None, no permutation applied).
+                    Grid size is automatically inferred from permutation length.
         batch_size: Batch size
         shuffle: Whether to shuffle data
         num_workers: Number of worker processes
@@ -161,7 +197,7 @@ def create_loader(
 
     # Apply permutation if specified
     if permutation is not None:
-        subset = PermutedDogsVsCatsDataset(subset, grid_size=grid_size, permutation=permutation)
+        subset = PermutedDogsVsCatsDataset(subset, permutation=permutation)
 
     # Create DataLoader
     loader = DataLoader(

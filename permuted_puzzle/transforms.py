@@ -4,6 +4,29 @@ import torch
 from torchvision import transforms
 
 def baseline_train_transforms(input_size: int, mean, std):
+    """
+    Create the standard training data transformation pipeline.
+
+    Applies random spatial augmentations and normalization consistent
+    with ImageNet-style preprocessing.
+
+    Args:
+        input_size (int): Final spatial size (height and width) expected by the model.
+        mean (list or tuple): Per-channel mean for normalization (e.g. ImageNet mean).
+        std (list or tuple): Per-channel standard deviation for normalization.
+
+    Returns:
+        torchvision.transforms.Compose: Composed transform performing:
+            - RandomResizedCrop(input_size, scale=(0.7, 1.0), ratio=(0.9, 1.1))
+            - RandomHorizontalFlip()
+            - ToTensor()
+            - Normalize(mean, std)
+
+    Notes:
+        The crop and flip augmentations introduce moderate variation
+        while preserving semantic content, helping prevent overfitting
+        on small or medium-sized datasets.
+    """
     return transforms.Compose([
         transforms.RandomResizedCrop(input_size, scale=(0.7, 1.0), ratio=(0.9, 1.1)),
         transforms.RandomHorizontalFlip(),
@@ -12,8 +35,32 @@ def baseline_train_transforms(input_size: int, mean, std):
     ])
 
 def baseline_val_transforms(input_size: int, mean, std):
+    """
+        Create the standard validation data transformation pipeline.
+
+        Applies deterministic resizing, cropping, and normalization for
+        consistent evaluation. Mirrors standard ImageNet validation
+        preprocessing, where images are resized slightly larger and then
+        center-cropped to the model's input size.
+
+        Args:
+            input_size (int): Final spatial size (height and width) expected by the model.
+            mean (list or tuple): Per-channel mean for normalization (e.g. ImageNet mean).
+            std (list or tuple): Per-channel standard deviation for normalization.
+
+        Returns:
+            torchvision.transforms.Compose: Composed transform performing:
+                - Resize(int(input_size * 1.14))
+                - CenterCrop(input_size)
+                - ToTensor()
+                - Normalize(mean, std)
+
+        Notes:
+            The factor 1.14 approximates the traditional 256→224 scaling used
+            in ImageNet pipelines (256/224 ≈ 1.14).
+        """
     return transforms.Compose([
-        transforms.Resize(int(input_size * 1.14)),  # classic 256 → center 224 style
+        transforms.Resize(int(input_size * 1.14)),
         transforms.CenterCrop(input_size),
         transforms.ToTensor(),
         transforms.Normalize(mean=mean, std=std),
@@ -21,81 +68,62 @@ def baseline_val_transforms(input_size: int, mean, std):
 
 def permute_image_tensor(
     image_tensor,
-    grid_size=2,
     permutation=None,
-    random_seed=None,
-    highlight_tile_idx=None,
-    border_width=3
+    grid_size=None,
+    random_seed=None
 ):
     """
-    Split and permute a square image tensor (C, H, W).
+    Split image into N×N tiles and permute them using vectorized operations.
 
     Args:
         image_tensor: torch.Tensor of shape (C, H, W)
-        grid_size: number of tiles per dimension (N)
-        permutation: optional list of length N*N indicating new tile order.
-                    If None, uses identity permutation (no shuffle).
-        random_seed: optional int, if provided generates random permutation with this seed.
-                    Only used when permutation=None. Makes randomness explicit.
-        highlight_tile_idx: optional int, tile index to highlight with border (for debugging)
-        border_width: width of highlight border in pixels (default 3)
+        permutation: list of length N² indicating new tile order.
+                    If provided, grid_size is automatically inferred.
+        grid_size: number of tiles per dimension (N). Only required if permutation=None.
+        random_seed: optional seed for random permutation generation.
 
     Returns:
         torch.Tensor of shape (C, H, W) with permuted tiles
+
+    Raises:
+        ValueError: If both permutation and grid_size are None, or if permutation length is not a perfect square.
     """
+    # Infer grid_size from permutation
+    if permutation is not None:
+        n_tiles = len(permutation)
+        grid_size = int(n_tiles ** 0.5)
+        if grid_size * grid_size != n_tiles:
+            raise ValueError(f"Permutation length must be a perfect square, got {n_tiles}")
+    elif grid_size is None:
+        raise ValueError("Either permutation or grid_size must be provided")
+
+    # Generate permutation if needed
+    if permutation is None:
+        permutation = list(range(grid_size * grid_size))
+        if random_seed is not None:
+            random.seed(random_seed)
+            random.shuffle(permutation)
+
     C, H, W = image_tensor.shape
     tile_h, tile_w = H // grid_size, W // grid_size
 
-    # Step 1: Split into tiles
-    tiles = []
-    for i in range(grid_size):
-        for j in range(grid_size):
-            tile = image_tensor[:,
-                                i * tile_h : (i + 1) * tile_h,
-                                j * tile_w : (j + 1) * tile_w].clone()
-            tiles.append(tile)
+    # Reshape: (C, H, W) -> (C, grid_size, tile_h, grid_size, tile_w)
+    tiles = image_tensor.reshape(C, grid_size, tile_h, grid_size, tile_w)
 
-    # Add border to highlight tile (before permutation)
-    if highlight_tile_idx is not None and 0 <= highlight_tile_idx < len(tiles):
-        tile = tiles[highlight_tile_idx]
-        # Add red border (RGB channels)
-        if C >= 3:
-            # Top border
-            tile[0, :border_width, :] = 1.0  # R
-            tile[1, :border_width, :] = 0.0  # G
-            tile[2, :border_width, :] = 0.0  # B
-            # Bottom border
-            tile[0, -border_width:, :] = 1.0
-            tile[1, -border_width:, :] = 0.0
-            tile[2, -border_width:, :] = 0.0
-            # Left border
-            tile[0, :, :border_width] = 1.0
-            tile[1, :, :border_width] = 0.0
-            tile[2, :, :border_width] = 0.0
-            # Right border
-            tile[0, :, -border_width:] = 1.0
-            tile[1, :, -border_width:] = 0.0
-            tile[2, :, -border_width:] = 0.0
+    # Transpose: (C, grid_size, tile_h, grid_size, tile_w) -> (C, grid_size, grid_size, tile_h, tile_w)
+    tiles = tiles.permute(0, 1, 3, 2, 4)
 
-    # Step 2: Permute tiles
-    if permutation is None:
-        if random_seed is not None:
-            # Explicit random permutation requested
-            import random
-            permutation = list(range(len(tiles)))
-            random.seed(random_seed)
-            random.shuffle(permutation)
-        else:
-            # No permutation specified - use identity (no shuffle)
-            permutation = list(range(len(tiles)))
+    # Flatten tiles: (C, grid_size, grid_size, tile_h, tile_w) -> (C, N², tile_h, tile_w)
+    tiles = tiles.reshape(C, grid_size * grid_size, tile_h, tile_w)
 
-    permuted_tiles = [tiles[i] for i in permutation]
+    # Apply permutation
+    tiles = tiles[:, permutation, :, :]
 
-    # Step 3: Reconstruct image
-    rows = []
-    for i in range(grid_size):
-        row = torch.cat(permuted_tiles[i * grid_size : (i + 1) * grid_size], dim=2)
-        rows.append(row)
-    new_image = torch.cat(rows, dim=1)
+    # Reshape back: (C, N², tile_h, tile_w) -> (C, grid_size, grid_size, tile_h, tile_w)
+    tiles = tiles.reshape(C, grid_size, grid_size, tile_h, tile_w)
 
-    return new_image
+    # Transpose back: (C, grid_size, grid_size, tile_h, tile_w) -> (C, grid_size, tile_h, grid_size, tile_w)
+    tiles = tiles.permute(0, 1, 3, 2, 4)
+
+    # Reconstruct: -> (C, H, W)
+    return tiles.reshape(C, H, W)
