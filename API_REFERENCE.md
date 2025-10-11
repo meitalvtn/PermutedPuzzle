@@ -108,6 +108,30 @@ Quick reference for main library functions.
 
 ---
 
+## Feature Analysis (`permuted_puzzle.feature_analysis`)
+
+### `extract_features(model, image_tensor, layer_name='layer4', device='cuda')`
+**Input:** Model, normalized image tensor (C, H, W) or (1, C, H, W), layer name, device
+**Output:** Feature map tensor (C, H, W)
+**Description:** Extract intermediate feature representations from a specific layer (forward pass only, no gradients)
+
+### `permute_feature_map(feature_map, permutation, grid_size=None)`
+**Input:** Feature tensor (C, H, W) or (1, C, H, W), permutation list, optional grid size
+**Output:** Permuted feature map with same shape
+**Description:** Apply spatial tile permutation to feature map (works with any number of channels)
+
+### `inverse_permutation(permutation)`
+**Input:** List of integers representing a permutation
+**Output:** List of integers (inverse permutation)
+**Description:** Compute the inverse of a given permutation
+
+### `compare_features(feature_map1, feature_map2)`
+**Input:** Two feature tensors of same shape
+**Output:** Dict with similarity metrics ('cosine', 'mse', 'mae', 'correlation', 'normalized_l2')
+**Description:** Compute multiple similarity measures between two feature maps
+
+---
+
 ## Config Dict Format
 
 ```python
@@ -175,4 +199,47 @@ results = run_gradcam_analysis(
 for item in results['correct']:
     print(f"Label: {item['label']}, Pred: {item['pred']}")
     # item['image'], item['heatmap'], item['overlay'] are numpy arrays ready for plotting
+```
+
+### Feature Unscrambling Analysis
+```python
+from permuted_puzzle.feature_analysis import (
+    extract_features,
+    permute_feature_map,
+    inverse_permutation,
+    compare_features
+)
+from permuted_puzzle.models import build_model
+from permuted_puzzle.data import DogsVsCatsDataset
+from permuted_puzzle.transforms import baseline_val_transforms, permute_image_tensor
+import torch
+
+# Load baseline and permuted models
+baseline_model = build_model('resnet18', pretrained=False)
+baseline_model.load_state_dict(torch.load('results/baseline_model.pth'))
+
+permuted_model = build_model('resnet18', pretrained=False)
+permuted_model.load_state_dict(torch.load('results/permuted_grid3_model.pth'))
+
+# Load test image
+dataset = DogsVsCatsDataset('data/train', transform=baseline_val_transforms(224, [0.485, 0.456, 0.406], [0.229, 0.224, 0.225]))
+image, label = dataset[0]
+
+# Extract features from baseline model
+f_original = extract_features(baseline_model, image, layer_name='layer4', device='cuda')
+
+# Create permuted version and extract features
+permutation = [3, 1, 2, 0, 7, 5, 6, 4, 8]  # 3x3 permutation used during training
+permuted_image = permute_image_tensor(image, permutation=permutation)
+f_permuted = extract_features(permuted_model, permuted_image, layer_name='layer4', device='cuda')
+
+# Unscramble feature map using inverse permutation
+inv_perm = inverse_permutation(permutation)
+f_unscrambled = permute_feature_map(f_permuted, inv_perm, grid_size=3)
+
+# Compare similarity
+similarity = compare_features(f_original, f_unscrambled)
+print(f"Cosine Similarity: {similarity['cosine']:.4f}")
+print(f"MSE: {similarity['mse']:.4f}")
+print(f"Correlation: {similarity['correlation']:.4f}")
 ```
