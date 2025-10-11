@@ -96,8 +96,7 @@ class PermutedDogsVsCatsDataset(Dataset):
 
 def split_indices(
     n_samples: int,
-    splits: List[float],
-    seed: int = 0
+    splits: List[float]
 ) -> Dict[str, np.ndarray]:
     """
     Split dataset indices into multiple sets (e.g., train/val/test).
@@ -105,17 +104,19 @@ def split_indices(
     Args:
         n_samples: Total number of samples
         splits: List of split ratios (must sum to 1.0), e.g., [0.6, 0.2, 0.2]
-        seed: Random seed for reproducibility
 
     Returns:
         Dict mapping split names to index arrays, e.g.,
         {'train': array([...]), 'val': array([...]), 'test': array([...])}
+
+    Note:
+        The generated split indices should be saved (e.g., in metrics.json)
+        for reproducibility rather than relying on random seeds.
     """
     if not math.isclose(sum(splits), 1.0, rel_tol=1e-5):
         raise ValueError(f"Splits must sum to 1.0, got {sum(splits)}")
 
     # Generate shuffled indices
-    torch.manual_seed(seed)
     indices = torch.randperm(n_samples).numpy()
 
     # Split indices
@@ -135,18 +136,20 @@ def split_indices(
     return result
 
 
-def generate_permutation(grid_size: int, seed: int) -> List[int]:
+def generate_permutation(grid_size: int) -> List[int]:
     """
-    Generate deterministic NxN tile permutation.
+    Generate random NxN tile permutation.
 
     Args:
         grid_size: Grid dimension (N for NxN grid)
-        seed: Random seed for reproducibility
 
     Returns:
         List of length grid_size^2 representing tile permutation
+
+    Note:
+        The generated permutation should be saved (e.g., in metrics.json)
+        for reproducibility rather than relying on random seeds.
     """
-    random.seed(seed)
     n_tiles = grid_size * grid_size
     perm = list(range(n_tiles))
     random.shuffle(perm)

@@ -49,7 +49,6 @@ def run_single_experiment(
                 - weight_decay: Weight decay for optimizer
                 - batch_size: Batch size
                 - dropout: Dropout rate
-                - seed: Random seed for reproducibility
                 - pretrained: Whether to use ImageNet pretrained weights (default: True)
         device: Device to train on ('cuda' or 'cpu')
 
@@ -80,7 +79,7 @@ def run_single_experiment(
 
     # Load dataset and split (60/20/20 train/val/test)
     dataset = DogsVsCatsDataset(data_path)
-    splits = split_indices(len(dataset), splits=[0.6, 0.2, 0.2], seed=config['seed'])
+    splits = split_indices(len(dataset), splits=[0.6, 0.2, 0.2])
     print(f"Split: {len(splits['train'])} train, {len(splits['val'])} val, {len(splits['test'])} test")
 
     # Get model config
@@ -100,7 +99,7 @@ def run_single_experiment(
     if grid_size == 1:
         perm = None
     else:
-        perm = generate_permutation(grid_size=grid_size, seed=config['seed'])
+        perm = generate_permutation(grid_size=grid_size)
 
     # Create loaders (including test)
     train_loader = create_loader(

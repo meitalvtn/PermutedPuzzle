@@ -11,15 +11,15 @@ Quick reference for main library functions.
 **Output:** Dataset object
 **Description:** Load dogs vs cats images from directory
 
-### `generate_permutation(grid_size, seed)`
-**Input:** Grid size (N), random seed
+### `generate_permutation(grid_size)`
+**Input:** Grid size (N)
 **Output:** List of N² integers
-**Description:** Generate deterministic tile permutation
+**Description:** Generate random tile permutation (saved to metrics.json for reproducibility)
 
-### `split_indices(n_samples, splits, seed=0)`
-**Input:** Number of samples, split ratios [0.6, 0.2, 0.2], seed
+### `split_indices(n_samples, splits)`
+**Input:** Number of samples, split ratios [0.6, 0.2, 0.2]
 **Output:** Dict with 'train'/'val'/'test' index arrays
-**Description:** Split dataset indices reproducibly
+**Description:** Split dataset indices randomly (saved to metrics.json for reproducibility)
 
 ### `create_loader(dataset, indices, transform, permutation=None, batch_size=64, shuffle=False)`
 **Input:** Dataset, indices, transform, optional permutation, batch size, shuffle flag
@@ -117,8 +117,7 @@ config = {
     "weight_decay": 1e-4,
     "batch_size": 32,
     "dropout": 0.2,
-    "pretrained": True,  # Use ImageNet weights
-    "seed": 42
+    "pretrained": True  # Use ImageNet weights
 }
 ```
 
@@ -139,7 +138,7 @@ results = run_experiment_grid(
     grid_sizes=[1, 2, 4, 8],
     data_path="data/train",
     results_root=Path("results"),
-    config={"epochs": 10, "lr": 1e-4, "batch_size": 32, "pretrained": True, "seed": 42}
+    config={"epochs": 10, "lr": 1e-4, "batch_size": 32, "dropout": 0.2, "pretrained": True}
 )
 
 print_experiment_summary(results)
@@ -157,10 +156,10 @@ import torch
 model = build_model('resnet18', pretrained=False)
 model.load_state_dict(torch.load('results/models/resnet18_grid3.pth'))
 
-# Create test dataloader
+# Create test dataloader (or load splits/permutation from metrics.json)
 dataset = DogsVsCatsDataset('data/train')
-splits = split_indices(len(dataset), [0.6, 0.2, 0.2], seed=42)
-perm = generate_permutation(grid_size=3, seed=42)
+splits = split_indices(len(dataset), [0.6, 0.2, 0.2])
+perm = generate_permutation(grid_size=3)
 val_transform = baseline_val_transforms(224, [0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
 test_loader = create_loader(dataset, splits['test'], val_transform, permutation=perm)
 
