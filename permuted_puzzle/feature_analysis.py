@@ -335,3 +335,93 @@ def compare_features(
         'correlation': correlation,
         'normalized_l2': normalized_l2
     }
+
+
+def get_compatible_layers(
+    model: nn.Module,
+    grid_size: int,
+    input_size: int = 224,
+    device: str = 'cuda'
+) -> Dict[str, tuple]:
+    """
+    Find all layers in a model with feature map dimensions divisible by grid_size.
+
+    Runs a forward pass through the model and identifies which layers produce
+    feature maps with spatial dimensions (H, W) that can be evenly divided into
+    grid_size x grid_size blocks. This is essential for permutation-based analysis.
+
+    Args:
+        model: PyTorch model to analyze
+        grid_size: Desired grid size for tile permutation (e.g., 2, 3, 4)
+        input_size: Input image size (assumes square images)
+        device: Device to run computation on ('cuda' or 'cpu')
+
+    Returns:
+        Dictionary mapping layer names to their spatial dimensions (H, W).
+        Only includes layers where both H and W are divisible by grid_size.
+
+    Example:
+        >>> model = build_model('resnet18')
+        >>> compatible = get_compatible_layers(model, grid_size=4)
+        >>> for layer_name, (h, w) in compatible.items():
+        >>>     print(f"{layer_name}: {h}x{w} -> {h//4}x{w//4} blocks")
+        layer1: 56x56 -> 14x14 blocks
+        layer2: 28x28 -> 7x7 blocks
+
+    Note:
+        For ResNet18 with 224x224 input:
+        - grid_size=2: layer1 (56x56), layer2 (28x28), layer3 (14x14)
+        - grid_size=3: None compatible
+        - grid_size=4: layer1 (56x56), layer2 (28x28)
+        - grid_size=7: layer1 (56x56), layer2 (28x28), layer3 (14x14), layer4 (7x7)
+    """
+    model.eval()
+    model.to(device)
+
+    # Storage for layer activations
+    activations = {}
+
+    # Hook function to capture all layer outputs
+    def hook_fn(name):
+        def hook(module, input, output):
+            # Only store 4D tensors (B, C, H, W)
+            if isinstance(output, torch.Tensor) and output.ndim == 4:
+                activations[name] = output.shape
+        return hook
+
+    # Register hooks on all named modules
+    handles = []
+    for name, module in model.named_modules():
+        # Skip empty container modules and the model itself
+        if len(list(module.children())) == 0 and name != '':
+            handle = module.register_forward_hook(hook_fn(name))
+            handles.append(handle)
+
+    # Run a dummy forward pass
+    dummy_input = torch.randn(1, 3, input_size, input_size).to(device)
+    with torch.no_grad():
+        try:
+            _ = model(dummy_input)
+        except Exception as e:
+            # Clean up hooks even if forward pass fails
+            for handle in handles:
+                handle.remove()
+            raise RuntimeError(f"Forward pass failed: {e}")
+
+    # Remove all hooks
+    for handle in handles:
+        handle.remove()
+
+    # Filter for compatible layers
+    compatible_layers = {}
+    for name, shape in activations.items():
+        _, _, h, w = shape
+        if h % grid_size == 0 and w % grid_size == 0:
+            compatible_layers[name] = (h, w)
+
+    # Sort by spatial resolution (largest first)
+    compatible_layers = dict(
+        sorted(compatible_layers.items(), key=lambda x: x[1][0] * x[1][1], reverse=True)
+    )
+
+    return compatible_layers

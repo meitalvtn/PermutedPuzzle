@@ -130,6 +130,11 @@ Quick reference for main library functions.
 **Output:** Dict with similarity metrics ('cosine', 'mse', 'mae', 'correlation', 'normalized_l2')
 **Description:** Compute multiple similarity measures between two feature maps
 
+### `get_compatible_layers(model, grid_size, input_size=224, device='cuda')`
+**Input:** Model, grid size, input image size, device
+**Output:** Dict mapping layer names to spatial dimensions (H, W)
+**Description:** Find all layers with feature map dimensions divisible by grid_size (sorted by resolution, largest first)
+
 ---
 
 ## Config Dict Format
@@ -207,7 +212,8 @@ from permuted_puzzle.feature_analysis import (
     extract_features,
     permute_feature_map,
     inverse_permutation,
-    compare_features
+    compare_features,
+    get_compatible_layers
 )
 from permuted_puzzle.models import build_model
 from permuted_puzzle.data import DogsVsCatsDataset
@@ -219,27 +225,39 @@ baseline_model = build_model('resnet18', pretrained=False)
 baseline_model.load_state_dict(torch.load('results/baseline_model.pth'))
 
 permuted_model = build_model('resnet18', pretrained=False)
-permuted_model.load_state_dict(torch.load('results/permuted_grid3_model.pth'))
+permuted_model.load_state_dict(torch.load('results/permuted_grid4_model.pth'))
+
+# Find compatible layers for grid_size=4
+grid_size = 4
+compatible = get_compatible_layers(baseline_model, grid_size=grid_size)
+print(f"Compatible layers for grid_size={grid_size}:")
+for layer_name, (h, w) in compatible.items():
+    print(f"  {layer_name}: {h}x{w}")
+
+# Use the best compatible layer (first in dict = largest resolution)
+layer_name = list(compatible.keys())[0]
+print(f"\nUsing layer: {layer_name}")
 
 # Load test image
 dataset = DogsVsCatsDataset('data/train', transform=baseline_val_transforms(224, [0.485, 0.456, 0.406], [0.229, 0.224, 0.225]))
 image, label = dataset[0]
 
 # Extract features from baseline model
-f_original = extract_features(baseline_model, image, layer_name='layer4', device='cuda')
+f_original = extract_features(baseline_model, image, layer_name=layer_name, device='cuda')
 
 # Create permuted version and extract features
-permutation = [3, 1, 2, 0, 7, 5, 6, 4, 8]  # 3x3 permutation used during training
+permutation = [15, 2, 8, 1, 12, 6, 3, 9, 14, 5, 0, 11, 7, 13, 4, 10]  # 4x4 permutation
 permuted_image = permute_image_tensor(image, permutation=permutation)
-f_permuted = extract_features(permuted_model, permuted_image, layer_name='layer4', device='cuda')
+f_permuted = extract_features(permuted_model, permuted_image, layer_name=layer_name, device='cuda')
 
 # Unscramble feature map using inverse permutation
 inv_perm = inverse_permutation(permutation)
-f_unscrambled = permute_feature_map(f_permuted, inv_perm, grid_size=3)
+f_unscrambled = permute_feature_map(f_permuted, inv_perm, grid_size=grid_size)
 
 # Compare similarity
 similarity = compare_features(f_original, f_unscrambled)
-print(f"Cosine Similarity: {similarity['cosine']:.4f}")
-print(f"MSE: {similarity['mse']:.4f}")
-print(f"Correlation: {similarity['correlation']:.4f}")
+print(f"\nSimilarity metrics:")
+print(f"  Cosine Similarity: {similarity['cosine']:.4f}")
+print(f"  Correlation:       {similarity['correlation']:.4f}")
+print(f"  MSE:               {similarity['mse']:.4f}")
 ```
