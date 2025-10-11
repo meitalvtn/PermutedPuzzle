@@ -9,7 +9,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.cuda.amp import GradScaler, autocast
+from torch.amp import GradScaler, autocast
 from torch.utils.data import DataLoader
 import torchvision
 import matplotlib.pyplot as plt
@@ -177,7 +177,7 @@ def train_model(
     logger.info("\n=== Starting Training ===")
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
-    scaler = GradScaler() if torch.cuda.is_available() else None
+    scaler = GradScaler('cuda') if torch.cuda.is_available() else None
     logger.info(f"Optimizer: AdamW (lr={lr}, wd={weight_decay})")
     logger.info(f"Criterion: CrossEntropyLoss\n")
 
@@ -198,7 +198,7 @@ def train_model(
             images, labels = images.to(device_obj), labels.to(device_obj)
             optimizer.zero_grad()
             if scaler:
-                with autocast():
+                with autocast('cuda'):
                     outputs = model(images)
                     loss = criterion(outputs, labels)
                 scaler.scale(loss).backward()

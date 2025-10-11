@@ -33,6 +33,12 @@ from .train_utils import (
     evaluate_model,
 )
 
+# Grad-CAM utilities
+from .gradcam import (
+    generate_gradcam,
+    run_gradcam_analysis,
+)
+
 __all__ = [
     # Data
     'DogsVsCatsDataset',
@@ -51,4 +57,7 @@ __all__ = [
     # Training
     'train_model',
     'evaluate_model',
+    # Grad-CAM
+    'generate_gradcam',
+    'run_gradcam_analysis',
 ]

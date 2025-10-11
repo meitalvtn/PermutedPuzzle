@@ -6,3 +6,4 @@ tqdm==4.66.4
 pandas==2.2.2
 matplotlib==3.9.1
 jupyter==1.0.0
+opencv-python==4.9.0.80
