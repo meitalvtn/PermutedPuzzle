@@ -14,18 +14,17 @@ from permuted_puzzle.transforms import permute_image_tensor
 
 class DogsVsCatsDataset(Dataset):
     """
-    Dataset wrapper that applies a fixed or random N×N tile permutation.
+    Dataset for Dogs vs Cats classification from image directory.
 
-    Divides each input image into grid_size×grid_size tiles and reorders them
-    according to a provided or generated permutation.
+    Loads images from a directory, automatically assigns labels based on filename
+    (images with 'cat' in the name get label 0, others get label 1).
 
     Args:
-        base_dataset (Dataset): Underlying dataset to wrap (e.g., DogsVsCatsDataset).
-        grid_size (int): Number of tiles per image side.
-        permutation (list[int], optional): List of tile indices defining the permutation.
+        img_dir (str): Path to directory containing image files
+        transform (callable, optional): Transform to apply to images
 
     Returns:
-        (Tensor, int): Permuted image tensor and label.
+        (Tensor, int, str): Image tensor, label, and original filename
     """
     def __init__(self, img_dir, transform=None):
         self.img_dir = img_dir
@@ -46,7 +45,7 @@ class DogsVsCatsDataset(Dataset):
         if self.transform:
             image = self.transform(image)
 
-        return image, label
+        return image, label, img_name
 
 class PermutedDogsVsCatsDataset(Dataset):
     """
@@ -62,7 +61,7 @@ class PermutedDogsVsCatsDataset(Dataset):
                                 Length must be a perfect square (N²).
 
     Returns:
-        (Tensor, int): Permuted image tensor and label.
+        (Tensor, int, str): Permuted image tensor, label, and original filename
     """
     def __init__(self, base_dataset, permutation):
         """
@@ -87,11 +86,11 @@ class PermutedDogsVsCatsDataset(Dataset):
         return len(self.base_dataset)
 
     def __getitem__(self, idx):
-        image, label = self.base_dataset[idx]
+        image, label, filename = self.base_dataset[idx]
         permuted_image = permute_image_tensor(
             image, permutation=self.permutation
         )
-        return permuted_image, label
+        return permuted_image, label, filename
 
 
 def split_indices(

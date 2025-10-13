@@ -251,42 +251,57 @@ def generate_gradcam(
 def run_gradcam_analysis(
     model: nn.Module,
     dataloader: DataLoader,
-    num_per_class: int = 5,
+    num_heatmaps_per_class: Optional[int] = None,
+    num_overlays_per_class: int = 5,
     device: str = 'cuda',
     results_dir: Optional[Union[str, Path]] = None,
     layer_name: str = 'layer4',
     mean: List[float] = [0.485, 0.456, 0.406],
-    std: List[float] = [0.229, 0.224, 0.225]
+    std: List[float] = [0.229, 0.224, 0.225],
+    save_overlays: bool = True
 ) -> Dict[str, List[Dict[str, np.ndarray]]]:
     """
-    Run Grad-CAM analysis on a dataset, selecting correct and incorrect predictions.
+    Run Grad-CAM analysis on a dataset, separating quantitative and qualitative outputs.
 
-    This function evaluates the model on the provided dataloader, identifies
-    correct and incorrect predictions for each class, and generates Grad-CAM
-    visualizations for a specified number of samples per category.
+    This function evaluates the model on the provided dataloader and generates Grad-CAM
+    visualizations. Heatmaps and overlays can be saved independently with different limits
+    per class per category.
+
+    Directory structure:
+        results_dir/
+            heatmaps/
+                correct/    # Up to num_heatmaps_per_class per class (or all if None)
+                incorrect/  # Up to num_heatmaps_per_class per class (or all if None)
+            overlays/
+                correct/    # Up to num_overlays_per_class per class
+                incorrect/  # Up to num_overlays_per_class per class
 
     Args:
         model: Trained PyTorch model
         dataloader: DataLoader providing test samples
-        num_per_class: Number of samples per class per category (correct/incorrect)
+        num_heatmaps_per_class: Number of heatmaps (.npy) to save per class per category.
+                                If None, saves all heatmaps. Default: None (all)
+        num_overlays_per_class: Number of overlays (.png) to save per class per category.
+                                Default: 5
         device: Device to run computation on ('cuda' or 'cpu')
-        results_dir: Optional directory to save visualizations. If provided,
-                     saves images as PNG files organized by category
+        results_dir: Optional directory to save outputs. If None, nothing is saved to disk.
         layer_name: Name of target convolutional layer for Grad-CAM
         mean: Normalization mean (for denormalization during visualization)
         std: Normalization std (for denormalization during visualization)
+        save_overlays: Whether to save overlay visualizations as PNG files
 
     Returns:
         Dictionary with structure:
         {
             'correct': [
                 {
-                    'image': original image (H, W, 3),
                     'heatmap': Grad-CAM heatmap (H, W),
-                    'overlay': overlay visualization (H, W, 3),
+                    'overlay': overlay visualization (H, W, 3) or None,
                     'label': true label (int),
                     'pred': predicted label (int),
-                    'path': saved file path (str, if results_dir provided)
+                    'original_filename': source filename (str, if provided by dataset),
+                    'heatmap_path': saved heatmap path (str or None, if results_dir provided),
+                    'overlay_path': saved overlay path (str or None, if results_dir provided)
                 },
                 ...
             ],
@@ -296,131 +311,190 @@ def run_gradcam_analysis(
     model.eval()
     model.to(device)
 
-    # Storage for samples
-    correct_samples = {0: [], 1: []}  # class_id -> list of (image, label, pred)
-    incorrect_samples = {0: [], 1: []}
+    # Determine max samples we need to collect per category per class
+    max_needed_per_class = max(
+        num_heatmaps_per_class if num_heatmaps_per_class is not None else float('inf'),
+        num_overlays_per_class
+    )
 
-    # Collect predictions
-    print("Collecting predictions...")
+    # Storage for samples by category and class
+    samples_by_category = {
+        'correct': {0: [], 1: []},
+        'incorrect': {0: [], 1: []}
+    }
+
+    # Collect predictions until we have enough samples
+    print(f"Collecting samples (need {max_needed_per_class} per class per category)...")
     with torch.no_grad():
-        for images, labels in tqdm(dataloader, desc="Evaluating"):
+        for batch in tqdm(dataloader, desc="Evaluating"):
+            # Unpack batch (handles both 2-tuple and 3-tuple returns)
+            if len(batch) == 3:
+                images, labels, filenames = batch
+            else:
+                images, labels = batch
+                filenames = [None] * len(images)
+
             images = images.to(device)
             outputs = model(images)
             preds = outputs.argmax(dim=1)
 
-            for img, label, pred in zip(images, labels, preds):
+            for img, label, pred, filename in zip(images, labels, preds, filenames):
                 label_val = label.item()
                 pred_val = pred.item()
+                category = 'correct' if label_val == pred_val else 'incorrect'
 
-                if label_val == pred_val:
-                    if len(correct_samples[label_val]) < num_per_class:
-                        correct_samples[label_val].append((img.cpu(), label_val, pred_val))
-                else:
-                    if len(incorrect_samples[label_val]) < num_per_class:
-                        incorrect_samples[label_val].append((img.cpu(), label_val, pred_val))
+                # Only store if we need more samples for this category/class
+                if len(samples_by_category[category][label_val]) < max_needed_per_class:
+                    samples_by_category[category][label_val].append((
+                        img.cpu(),
+                        label_val,
+                        pred_val,
+                        filename
+                    ))
 
-                # Check if we have enough samples
-                if all(len(correct_samples[c]) >= num_per_class for c in [0, 1]) and \
-                   all(len(incorrect_samples[c]) >= num_per_class for c in [0, 1]):
-                    break
+            # Check if we have enough samples for all categories/classes
+            all_satisfied = all(
+                len(samples_by_category[cat][cls]) >= max_needed_per_class
+                for cat in ['correct', 'incorrect']
+                for cls in [0, 1]
+            )
+            if all_satisfied:
+                break
 
-    # Generate Grad-CAM visualizations
-    results = {'correct': [], 'incorrect': []}
+    # Flatten samples into single list for processing
+    all_samples = []
+    for category in ['correct', 'incorrect']:
+        for class_id in [0, 1]:
+            all_samples.extend(samples_by_category[category][class_id])
 
-    # Prepare output directory if specified
+    # Prepare output directory structure if specified
+    heatmaps_dir = None
+    overlays_dir = None
     if results_dir is not None:
         results_dir = Path(results_dir)
-        results_dir.mkdir(parents=True, exist_ok=True)
-        (results_dir / 'correct').mkdir(exist_ok=True)
-        (results_dir / 'incorrect').mkdir(exist_ok=True)
+        heatmaps_dir = results_dir / 'heatmaps'
+        overlays_dir = results_dir / 'overlays'
 
-    print("Generating Grad-CAM visualizations...")
+        # Create directory structure
+        for category in ['correct', 'incorrect']:
+            (heatmaps_dir / category).mkdir(parents=True, exist_ok=True)
+            if save_overlays:
+                (overlays_dir / category).mkdir(parents=True, exist_ok=True)
 
-    # Process correct predictions
-    for class_id, samples in correct_samples.items():
-        for idx, (img, label, pred) in enumerate(tqdm(samples, desc=f"Correct class {class_id}")):
-            heatmap, overlay = generate_gradcam(
-                model,
-                img,
-                target_class=pred,
-                layer_name=layer_name,
-                device=device,
-                mean=mean,
-                std=std
+    # Track heatmap and overlay counts per class per category
+    heatmap_counts = {
+        'correct': {0: 0, 1: 0},
+        'incorrect': {0: 0, 1: 0}
+    }
+    overlay_counts = {
+        'correct': {0: 0, 1: 0},
+        'incorrect': {0: 0, 1: 0}
+    }
+
+    # Counter for fallback filenames
+    sample_counts = {
+        'correct': {0: 0, 1: 0},
+        'incorrect': {0: 0, 1: 0}
+    }
+
+    # Generate Grad-CAM visualizations for all samples
+    results = {'correct': [], 'incorrect': []}
+
+    print(f"Generating Grad-CAM for {len(all_samples)} images...")
+    for img, label, pred, orig_filename in tqdm(all_samples, desc="Processing"):
+        # Determine category
+        category = 'correct' if label == pred else 'incorrect'
+        class_id = label
+
+        # Generate Grad-CAM heatmap
+        heatmap, overlay = generate_gradcam(
+            model,
+            img,
+            target_class=pred,
+            layer_name=layer_name,
+            device=device,
+            mean=mean,
+            std=std
+        )
+
+        result_entry = {
+            'heatmap': heatmap,
+            'overlay': overlay,
+            'label': label,
+            'pred': pred,
+            'original_filename': orig_filename
+        }
+
+        # Save to disk if directory provided
+        if results_dir is not None:
+            # Determine filename (use original or fallback)
+            if orig_filename:
+                name_without_ext = Path(orig_filename).stem
+            else:
+                idx = sample_counts[category][class_id]
+                if category == 'correct':
+                    class_name = 'cat' if class_id == 0 else 'dog'
+                    name_without_ext = f"class{class_id}_{class_name}_{idx:02d}"
+                else:
+                    true_class = 'cat' if label == 0 else 'dog'
+                    pred_class = 'cat' if pred == 0 else 'dog'
+                    name_without_ext = f"true{true_class}_pred{pred_class}_{idx:02d}"
+                sample_counts[category][class_id] += 1
+
+            # Save heatmap as .npy (check limit if specified)
+            should_save_heatmap = (
+                num_heatmaps_per_class is None or
+                heatmap_counts[category][class_id] < num_heatmaps_per_class
             )
 
-            # Denormalize original image for storage
-            img_np = img.numpy().transpose(1, 2, 0)
-            mean_arr = np.array(mean).reshape(1, 1, 3)
-            std_arr = np.array(std).reshape(1, 1, 3)
-            img_np = (img_np * std_arr) + mean_arr
-            img_np = np.clip(img_np * 255, 0, 255).astype(np.uint8)
+            if should_save_heatmap:
+                heatmap_filename = f"{name_without_ext}.npy"
+                heatmap_path = heatmaps_dir / category / heatmap_filename
+                np.save(str(heatmap_path), heatmap)
+                result_entry['heatmap_path'] = str(heatmap_path)
+                heatmap_counts[category][class_id] += 1
+            else:
+                result_entry['heatmap_path'] = None
 
-            result_entry = {
-                'image': img_np,
-                'heatmap': heatmap,
-                'overlay': overlay,
-                'label': label,
-                'pred': pred
-            }
-
-            # Save to disk if directory provided
-            if results_dir is not None:
-                class_name = 'cat' if class_id == 0 else 'dog'
-                filename = f"correct_class{class_id}_{class_name}_{idx:02d}.png"
-                filepath = results_dir / 'correct' / filename
-
-                # Create side-by-side visualization
-                combined = np.hstack([img_np, overlay])
-                cv2.imwrite(str(filepath), cv2.cvtColor(combined, cv2.COLOR_RGB2BGR))
-                result_entry['path'] = str(filepath)
-
-            results['correct'].append(result_entry)
-
-    # Process incorrect predictions
-    for class_id, samples in incorrect_samples.items():
-        for idx, (img, label, pred) in enumerate(tqdm(samples, desc=f"Incorrect class {class_id}")):
-            heatmap, overlay = generate_gradcam(
-                model,
-                img,
-                target_class=pred,
-                layer_name=layer_name,
-                device=device,
-                mean=mean,
-                std=std
+            # Save overlay as .png (check limit)
+            should_save_overlay = (
+                save_overlays and
+                overlay_counts[category][class_id] < num_overlays_per_class
             )
 
-            # Denormalize original image for storage
-            img_np = img.numpy().transpose(1, 2, 0)
-            mean_arr = np.array(mean).reshape(1, 1, 3)
-            std_arr = np.array(std).reshape(1, 1, 3)
-            img_np = (img_np * std_arr) + mean_arr
-            img_np = np.clip(img_np * 255, 0, 255).astype(np.uint8)
+            if should_save_overlay:
+                overlay_filename = f"{name_without_ext}.png"
+                overlay_path = overlays_dir / category / overlay_filename
+                cv2.imwrite(str(overlay_path), cv2.cvtColor(overlay, cv2.COLOR_RGB2BGR))
+                result_entry['overlay_path'] = str(overlay_path)
+                overlay_counts[category][class_id] += 1
+            else:
+                result_entry['overlay_path'] = None
 
-            result_entry = {
-                'image': img_np,
-                'heatmap': heatmap,
-                'overlay': overlay,
-                'label': label,
-                'pred': pred
-            }
+        results[category].append(result_entry)
 
-            # Save to disk if directory provided
-            if results_dir is not None:
-                true_class = 'cat' if label == 0 else 'dog'
-                pred_class = 'cat' if pred == 0 else 'dog'
-                filename = f"incorrect_true{true_class}_pred{pred_class}_{idx:02d}.png"
-                filepath = results_dir / 'incorrect' / filename
+    # Summary
+    num_correct = len(results['correct'])
+    num_incorrect = len(results['incorrect'])
+    total = num_correct + num_incorrect
 
-                # Create side-by-side visualization
-                combined = np.hstack([img_np, overlay])
-                cv2.imwrite(str(filepath), cv2.cvtColor(combined, cv2.COLOR_RGB2BGR))
-                result_entry['path'] = str(filepath)
+    print(f"\nProcessed {total} total images:")
+    print(f"  - Correct predictions: {num_correct}")
+    print(f"  - Incorrect predictions: {num_incorrect}")
 
-            results['incorrect'].append(result_entry)
-
-    print(f"Generated {len(results['correct'])} correct and {len(results['incorrect'])} incorrect visualizations")
     if results_dir is not None:
-        print(f"Results saved to {results_dir}")
+        print(f"\nResults saved to: {results_dir}")
+
+        # Report heatmaps
+        total_heatmaps_saved = sum(heatmap_counts['correct'].values()) + sum(heatmap_counts['incorrect'].values())
+        if num_heatmaps_per_class is None:
+            print(f"  - Heatmaps (.npy, all {total_heatmaps_saved} saved): {heatmaps_dir}")
+        else:
+            print(f"  - Heatmaps (.npy, {total_heatmaps_saved} saved, max {num_heatmaps_per_class} per class per category): {heatmaps_dir}")
+
+        # Report overlays
+        if save_overlays:
+            total_overlays_saved = sum(overlay_counts['correct'].values()) + sum(overlay_counts['incorrect'].values())
+            print(f"  - Overlays (.png, {total_overlays_saved} saved, max {num_overlays_per_class} per class per category): {overlays_dir}")
 
     return results

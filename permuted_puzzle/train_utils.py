@@ -53,7 +53,12 @@ def evaluate_model(
     total_loss, correct, total = 0, 0, 0
 
     with torch.no_grad():
-        for images, labels in loader:
+        for batch in loader:
+            # Unpack batch (handles both 2-tuple and 3-tuple returns)
+            if len(batch) == 3:
+                images, labels, _ = batch  # Ignore filenames
+            else:
+                images, labels = batch
             images, labels = images.to(device_obj), labels.to(device_obj)
             outputs = model(images)
             loss = criterion(outputs, labels)
@@ -160,7 +165,12 @@ def train_model(
 
     # Visualize sample batch
     logger.info("--- RUNNING VISUALIZATION CHECK ---")
-    data_batch, labels_batch = next(iter(train_loader))
+    batch = next(iter(train_loader))
+    # Unpack batch (handles both 2-tuple and 3-tuple returns)
+    if len(batch) == 3:
+        data_batch, labels_batch, _ = batch
+    else:
+        data_batch, labels_batch = batch
     logger.info(f"Shape of a single image tensor: {data_batch[0].shape}")
     grid_img = torchvision.utils.make_grid(data_batch[:4], nrow=4)
     mean, std = np.array(meta['mean']), np.array(meta['std'])
@@ -194,7 +204,12 @@ def train_model(
     def train_one_epoch(model, loader):
         model.train()
         total_loss, correct, total = 0, 0, 0
-        for images, labels in loader:
+        for batch in loader:
+            # Unpack batch (handles both 2-tuple and 3-tuple returns)
+            if len(batch) == 3:
+                images, labels, _ = batch  # Ignore filenames
+            else:
+                images, labels = batch
             images, labels = images.to(device_obj), labels.to(device_obj)
             optimizer.zero_grad()
             if scaler:

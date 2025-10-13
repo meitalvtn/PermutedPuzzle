@@ -67,7 +67,7 @@ def test_single_image_gradcam():
 
     # Test on first cat and first dog
     for idx in [0, len(dataset)//2]:  # First image and middle image (likely different class)
-        image, label = dataset[idx]
+        image, label, filename = dataset[idx]
         class_name = 'cat' if label == 0 else 'dog'
 
         print(f"\nProcessing image {idx}: {class_name}")
@@ -178,10 +178,14 @@ def test_batch_analysis():
 
     # Run batch analysis
     print("\nRunning batch Grad-CAM analysis...")
+    print("Settings:")
+    print("  - Heatmaps: ALL (no limit)")
+    print("  - Overlays: 3 per class per category")
     results = run_gradcam_analysis(
         model,
         test_loader,
-        num_per_class=3,  # 3 correct + 3 incorrect per class
+        num_heatmaps_per_class=None,  # Save ALL heatmaps
+        num_overlays_per_class=3,     # Save 3 overlay PNGs per class per category
         device=device,
         results_dir=output_dir,
         layer_name='layer4',
@@ -206,9 +210,10 @@ def test_batch_analysis():
         print(f"  {i+1}. True: {true_name}, Pred: {pred_name}")
 
     # Verify outputs
-    if 'path' in results['correct'][0]:
-        print(f"\nVisualizations saved to: {output_dir}")
-        print("  Subdirectories: correct/, incorrect/")
+    if 'heatmap_path' in results['correct'][0]:
+        print(f"\nOutputs saved to: {output_dir}")
+        print(f"  - Heatmaps (.npy): {output_dir / 'heatmaps'}")
+        print(f"  - Overlays (.png): {output_dir / 'overlays'}")
 
     # Create summary visualization
     create_summary_plot(results, output_dir)

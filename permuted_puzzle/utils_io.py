@@ -119,7 +119,12 @@ def save_preds(
     model.eval()
     all_logits, all_labels = [], []
     with torch.no_grad():
-        for xb, yb in loader:
+        for batch in loader:
+            # Unpack batch (handles both 2-tuple and 3-tuple returns)
+            if len(batch) == 3:
+                xb, yb, _ = batch  # Ignore filenames
+            else:
+                xb, yb = batch
             xb, yb = xb.to(device), yb.to(device)
             logits = model(xb)
             all_logits.append(logits.detach().cpu())
