@@ -5,6 +5,7 @@ from .resnet18 import build as resnet18_build
 from .mobilenet_v3_large import build as mobilenet_v3_large_build
 from .efficientnet_b0 import build as efficientnet_b0_build
 from .convnext_tiny import build as convnext_tiny_build
+from .swin_tiny import build as swin_tiny_build
 from .simple_cnn import build as simple_cnn_build
 
 REGISTRY = {
@@ -12,6 +13,7 @@ REGISTRY = {
     "mobilenet_v3_large": mobilenet_v3_large_build,
     "efficientnet_b0": efficientnet_b0_build,
     "convnext_tiny": convnext_tiny_build,
+    "swin_tiny": swin_tiny_build,
     "simple_cnn": simple_cnn_build,
 }
 
@@ -21,6 +23,7 @@ META_REGISTRY = {
     "mobilenet_v3_large": {"input_size": 224, "mean": [.485, .456, .406], "std": [.229, .224, .225]},
     "efficientnet_b0": {"input_size": 224, "mean": [.485, .456, .406], "std": [.229, .224, .225]},
     "convnext_tiny": {"input_size": 224, "mean": [.485, .456, .406], "std": [.229, .224, .225]},
+    "swin_tiny": {"input_size": 224, "mean": [.485, .456, .406], "std": [.229, .224, .225]},
     "simple_cnn": {"input_size": 224, "mean": [.485, .456, .406], "std": [.229, .224, .225]},
 }
 

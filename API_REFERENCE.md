@@ -31,7 +31,7 @@ Quick reference for main library functions.
 ## Models (`permuted_puzzle.models`)
 
 ### `build_model(model_name, num_classes=2, pretrained=True, dropout=0.2)`
-**Input:** Model name ('resnet18'/'resnet34'/'resnet50'), classes, pretrained flag, dropout
+**Input:** Model name ('resnet18'/'mobilenet_v3_large'/'efficientnet_b0'/'convnext_tiny'/'swin_tiny'/'simple_cnn'), classes, pretrained flag, dropout
 **Output:** PyTorch model
 **Description:** Build pretrained or from-scratch model
 
