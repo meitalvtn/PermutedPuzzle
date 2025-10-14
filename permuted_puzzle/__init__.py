@@ -39,6 +39,20 @@ from .gradcam import (
     run_gradcam_analysis,
 )
 
+# Metrics utilities
+from .metrics_utils import (
+    load_metrics,
+    get_split_indices,
+    get_permutation,
+    get_all_permutations,
+    get_model_info,
+    get_performance_metrics,
+    get_training_config,
+    get_training_history,
+    compare_runs,
+    get_grid_info,
+)
+
 __all__ = [
     # Data
     'DogsVsCatsDataset',
@@ -60,4 +74,15 @@ __all__ = [
     # Grad-CAM
     'generate_gradcam',
     'run_gradcam_analysis',
+    # Metrics
+    'load_metrics',
+    'get_split_indices',
+    'get_permutation',
+    'get_all_permutations',
+    'get_model_info',
+    'get_performance_metrics',
+    'get_training_config',
+    'get_training_history',
+    'compare_runs',
+    'get_grid_info',
 ]
