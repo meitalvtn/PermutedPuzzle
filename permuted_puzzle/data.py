@@ -47,6 +47,26 @@ class DogsVsCatsDataset(Dataset):
 
         return image, label, img_name
 
+    def get_path_by_filename(self, filename: str) -> str:
+        """
+        Get the full path to an image given its filename.
+
+        Args:
+            filename: Image filename (e.g., 'cat.123.jpg')
+
+        Returns:
+            Full path to the image file
+
+        Raises:
+            ValueError: If filename is not found in the dataset
+        """
+        if filename not in self.image_filenames:
+            raise ValueError(
+                f"Filename '{filename}' not found in dataset. "
+                f"Available filenames must end with '.jpg' and be in {self.img_dir}"
+            )
+        return os.path.join(self.img_dir, filename)
+
 class PermutedDogsVsCatsDataset(Dataset):
     """
     Dataset wrapper that applies a fixed N×N tile permutation.
@@ -91,6 +111,35 @@ class PermutedDogsVsCatsDataset(Dataset):
             image, permutation=self.permutation
         )
         return permuted_image, label, filename
+
+    def get_path_by_filename(self, filename: str) -> str:
+        """
+        Get the full path to an image given its filename.
+
+        Delegates to the underlying base dataset. If base_dataset is a Subset,
+        traverses to find the original DogsVsCatsDataset.
+
+        Args:
+            filename: Image filename (e.g., 'cat.123.jpg')
+
+        Returns:
+            Full path to the image file
+
+        Raises:
+            ValueError: If filename is not found in the dataset
+            AttributeError: If base dataset doesn't support get_path_by_filename
+        """
+        # Traverse wrapped datasets to find the original dataset with img_dir
+        dataset = self.base_dataset
+        while hasattr(dataset, 'dataset'):
+            dataset = dataset.dataset
+
+        if not hasattr(dataset, 'get_path_by_filename'):
+            raise AttributeError(
+                f"Base dataset {type(dataset).__name__} does not have get_path_by_filename method"
+            )
+
+        return dataset.get_path_by_filename(filename)
 
 
 def split_indices(

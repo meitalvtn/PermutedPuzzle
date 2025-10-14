@@ -317,16 +317,19 @@ def run_gradcam_analysis(
         num_overlays_per_class
     )
 
+    # Calculate total target samples (4 = 2 classes × 2 categories)
+    total_target = max_needed_per_class * 4 if max_needed_per_class != float('inf') else float('inf')
+
     # Storage for samples by category and class
     samples_by_category = {
         'correct': {0: [], 1: []},
         'incorrect': {0: [], 1: []}
     }
 
-    # Collect predictions until we have enough samples
-    print(f"Collecting samples (need {max_needed_per_class} per class per category)...")
+    # Phase 1: Balanced collection (try to get max_needed_per_class per category/class)
+    print(f"Collecting samples (target: {max_needed_per_class} per class per category, {total_target} total)...")
     with torch.no_grad():
-        for batch in tqdm(dataloader, desc="Evaluating"):
+        for batch in tqdm(dataloader, desc="Phase 1: Balanced collection"):
             # Unpack batch (handles both 2-tuple and 3-tuple returns)
             if len(batch) == 3:
                 images, labels, filenames = batch
@@ -360,6 +363,49 @@ def run_gradcam_analysis(
             )
             if all_satisfied:
                 break
+
+        # Phase 2: Fill remaining quota (if we haven't reached total target)
+        current_total = sum(
+            len(samples_by_category[cat][cls])
+            for cat in ['correct', 'incorrect']
+            for cls in [0, 1]
+        )
+
+        if total_target != float('inf') and current_total < total_target:
+            remaining = total_target - current_total
+            print(f"Phase 2: Filling remaining {remaining} samples from available data...")
+
+            for batch in tqdm(dataloader, desc="Phase 2: Fill remaining quota"):
+                if current_total >= total_target:
+                    break
+
+                # Unpack batch
+                if len(batch) == 3:
+                    images, labels, filenames = batch
+                else:
+                    images, labels = batch
+                    filenames = [None] * len(images)
+
+                images = images.to(device)
+                outputs = model(images)
+                preds = outputs.argmax(dim=1)
+
+                for img, label, pred, filename in zip(images, labels, preds, filenames):
+                    if current_total >= total_target:
+                        break
+
+                    label_val = label.item()
+                    pred_val = pred.item()
+                    category = 'correct' if label_val == pred_val else 'incorrect'
+
+                    # Add sample regardless of category/class distribution
+                    samples_by_category[category][label_val].append((
+                        img.cpu(),
+                        label_val,
+                        pred_val,
+                        filename
+                    ))
+                    current_total += 1
 
     # Flatten samples into single list for processing
     all_samples = []
@@ -480,7 +526,11 @@ def run_gradcam_analysis(
 
     print(f"\nProcessed {total} total images:")
     print(f"  - Correct predictions: {num_correct}")
+    print(f"    - Class 0: {len([r for r in results['correct'] if r['label'] == 0])}")
+    print(f"    - Class 1: {len([r for r in results['correct'] if r['label'] == 1])}")
     print(f"  - Incorrect predictions: {num_incorrect}")
+    print(f"    - Class 0: {len([r for r in results['incorrect'] if r['label'] == 0])}")
+    print(f"    - Class 1: {len([r for r in results['incorrect'] if r['label'] == 1])}")
 
     if results_dir is not None:
         print(f"\nResults saved to: {results_dir}")
