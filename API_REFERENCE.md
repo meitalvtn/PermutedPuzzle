@@ -101,10 +101,15 @@ Quick reference for main library functions.
 **Output:** Tuple (heatmap, overlay_image) as numpy arrays
 **Description:** Compute Grad-CAM activation map for chosen layer and overlay it on original image
 
-### `run_gradcam_analysis(model, dataloader, num_per_class=5, device='cuda', results_dir=None, layer_name='layer4', mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])`
-**Input:** Model, test DataLoader, samples per class, device, optional output directory, layer name, normalization params
-**Output:** Dict with 'correct' and 'incorrect' lists containing visualization data
-**Description:** Automatically select correct/incorrect predictions, generate Grad-CAMs, save visualizations
+### `run_gradcam_analysis(model, dataloader, max_samples=None, device='cuda', results_dir=None, layer_name='layer4', mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])`
+**Input:** Model, test DataLoader, max total samples (None for all), device, optional output directory, layer name, normalization params
+**Output:** Dict with 'correct' and 'incorrect' lists containing heatmap data and image tensors
+**Description:** Automatically collect predictions with balanced correct/incorrect sampling (attempts 50/50 split up to max_samples limit), generate and save Grad-CAM heatmaps
+
+### `save_gradcam_overlays(results, results_dir, mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225], colormap=cv2.COLORMAP_JET, alpha=0.4)`
+**Input:** Results dict from run_gradcam_analysis, output directory, normalization params, colormap, alpha transparency
+**Output:** None (saves PNG files)
+**Description:** Generate and save overlay visualizations from Grad-CAM results. Allows creating overlays for a subset of results with custom visualization parameters
 
 ---
 
@@ -175,7 +180,7 @@ print_experiment_summary(results)
 
 ### Grad-CAM Analysis
 ```python
-from permuted_puzzle.gradcam import run_gradcam_analysis, generate_gradcam
+from permuted_puzzle.gradcam import run_gradcam_analysis, save_gradcam_overlays
 from permuted_puzzle.models import build_model
 from permuted_puzzle.data import DogsVsCatsDataset, create_loader, split_indices, generate_permutation
 from permuted_puzzle.transforms import baseline_val_transforms
@@ -192,18 +197,27 @@ perm = generate_permutation(grid_size=3)
 val_transform = baseline_val_transforms(224, [0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
 test_loader = create_loader(dataset, splits['test'], val_transform, permutation=perm)
 
-# Run analysis
+# Run analysis with max 20 total samples (attempts 10 correct, 10 incorrect)
 results = run_gradcam_analysis(
     model,
     test_loader,
-    num_per_class=5,
+    max_samples=20,
     results_dir='results/gradcam/'
 )
 
-# Access individual visualizations
+# Optionally save overlay visualizations for a subset
+# For example, save overlays for only first 5 correct and first 5 incorrect
+subset_results = {
+    'correct': results['correct'][:5],
+    'incorrect': results['incorrect'][:5]
+}
+save_gradcam_overlays(subset_results, 'results/gradcam/')
+
+# Access individual data
 for item in results['correct']:
     print(f"Label: {item['label']}, Pred: {item['pred']}")
-    # item['image'], item['heatmap'], item['overlay'] are numpy arrays ready for plotting
+    # item['heatmap'] is numpy array (H, W)
+    # item['image_tensor'] is torch tensor (C, H, W)
 ```
 
 ### Feature Unscrambling Analysis

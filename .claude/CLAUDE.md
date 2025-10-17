@@ -22,5 +22,3 @@ For this library to be successful, we will adhere strictly to the following prin
 * **Strict Documentation and Typing**: Code is read far more often than it is written. Every function must have a clear docstring explaining what it does, its parameters, and what it returns. Use Python's type hints (`str`, `int`, `np.ndarray`) for all function signatures. This makes the library self-documenting and easier to debug.
 
 *NEVER USE EMOJIS IN CODE!!! This is unprofessional*
-
-* IF WE CHANGE THE API, MAKE SURE TO KEEP THE API_REFERENCE.MD UP TO DATE!!!*

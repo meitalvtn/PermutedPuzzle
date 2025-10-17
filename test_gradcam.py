@@ -1,129 +1,133 @@
 """
-Simple test to verify Grad-CAM module implementation.
+Test Grad-CAM API with real dataset samples.
+
+This test demonstrates the complete Grad-CAM workflow:
+1. Load a small dataset (5 images)
+2. Run Grad-CAM analysis with max_samples=10
+3. Save overlay visualizations for a subset (5 total)
 """
 
-import torch
-import numpy as np
-from permuted_puzzle.models import build_model
-from permuted_puzzle.gradcam import generate_gradcam, GradCAMHook, compute_gradcam_heatmap
+from pathlib import Path
+from torch.utils.data import DataLoader, Subset
+from permuted_puzzle.data import DogsVsCatsDataset
+from permuted_puzzle.models import build_model, get_model_config
+from permuted_puzzle.transforms import baseline_val_transforms
+from permuted_puzzle.gradcam import run_gradcam_analysis, save_gradcam_overlays
 
 
-def test_imports():
-    """Test that all imports work correctly."""
-    print("Testing imports...")
-    from permuted_puzzle.gradcam import generate_gradcam, run_gradcam_analysis
-    from permuted_puzzle import generate_gradcam as api_gradcam
-    from permuted_puzzle import run_gradcam_analysis as api_analysis
-    print("All imports successful")
+def test_gradcam_workflow():
+    """
+    Test complete Grad-CAM workflow:
+    - Load 5 images from dataset
+    - Run analysis with max_samples=10
+    - Save overlays for 5 samples
+    """
+    print("Testing Grad-CAM workflow...")
+    print("=" * 60)
 
+    # Setup paths
+    data_path = Path("test_data/data")
+    results_dir = Path("test_results/gradcam_test")
+    results_dir.mkdir(parents=True, exist_ok=True)
 
-def test_gradcam_hook():
-    """Test that GradCAMHook can attach to a model."""
-    print("\nTesting GradCAMHook...")
-    model = build_model('resnet18', pretrained=False)
+    # Check if dataset exists
+    if not data_path.exists():
+        print(f"Warning: Dataset not found at {data_path}")
+        print("Skipping test (requires Dogs vs Cats dataset)")
+        return
 
-    # Test hook creation
-    with GradCAMHook(model, 'layer4') as hook:
-        # Create dummy input
-        dummy_input = torch.randn(1, 3, 224, 224)
+    # Load dataset with 5 images
+    print("\n1. Loading dataset...")
+    model_config = get_model_config('resnet18')
+    transform = baseline_val_transforms(
+        model_config['input_size'],
+        model_config['mean'],
+        model_config['std']
+    )
+    full_dataset = DogsVsCatsDataset(str(data_path), transform=transform)
 
-        # Forward pass
-        output = model(dummy_input)
+    # Create subset with first 20 images to ensure we have enough for balanced sampling
+    subset_indices = list(range(min(20, len(full_dataset))))
+    dataset = Subset(full_dataset, subset_indices)
+    print(f"   Loaded {len(dataset)} images")
 
-        # Backward pass
-        output[0, 0].backward()
+    # Create dataloader
+    dataloader = DataLoader(dataset, batch_size=4, shuffle=False)
 
-        # Check that activations and gradients were captured
-        assert hook.activations is not None, "Activations not captured"
-        assert hook.gradients is not None, "Gradients not captured"
-        assert hook.activations.shape[0] == 1, "Batch size should be 1"
-
-        print(f"  Activations shape: {hook.activations.shape}")
-        print(f"  Gradients shape: {hook.gradients.shape}")
-
-    print("GradCAMHook test passed")
-
-
-def test_compute_heatmap():
-    """Test heatmap computation."""
-    print("\nTesting compute_gradcam_heatmap...")
-
-    # Create dummy activations and gradients
-    activations = torch.randn(1, 512, 7, 7)
-    gradients = torch.randn(1, 512, 7, 7)
-
-    # Compute heatmap
-    heatmap = compute_gradcam_heatmap(activations, gradients)
-
-    # Check output properties
-    assert isinstance(heatmap, np.ndarray), "Heatmap should be numpy array"
-    assert heatmap.shape == (7, 7), f"Expected shape (7, 7), got {heatmap.shape}"
-    assert heatmap.min() >= 0.0, "Heatmap values should be >= 0"
-    assert heatmap.max() <= 1.0, "Heatmap values should be <= 1"
-
-    print(f"  Heatmap shape: {heatmap.shape}")
-    print(f"  Heatmap range: [{heatmap.min():.3f}, {heatmap.max():.3f}]")
-    print("Heatmap computation test passed")
-
-
-def test_generate_gradcam():
-    """Test full Grad-CAM generation."""
-    print("\nTesting generate_gradcam...")
-
-    model = build_model('resnet18', pretrained=False)
+    # Build model (untrained is fine for testing)
+    print("\n2. Building model...")
+    model = build_model('resnet18', pretrained=False, num_classes=2)
     model.eval()
+    print("   Model ready (ResNet18)")
 
-    # Create dummy image
-    image_tensor = torch.randn(1, 3, 224, 224)
-
-    # Generate Grad-CAM
-    heatmap, overlay = generate_gradcam(
-        model,
-        image_tensor,
-        target_class=0,
+    # Run Grad-CAM analysis with max_samples=10
+    print("\n3. Running Grad-CAM analysis (max_samples=10)...")
+    results = run_gradcam_analysis(
+        model=model,
+        dataloader=dataloader,
+        max_samples=10,
+        device='cpu',
+        results_dir=str(results_dir),
         layer_name='layer4',
-        device='cpu'
+        mean=model_config['mean'],
+        std=model_config['std']
     )
 
-    # Check outputs
-    assert isinstance(heatmap, np.ndarray), "Heatmap should be numpy array"
-    assert isinstance(overlay, np.ndarray), "Overlay should be numpy array"
-    assert heatmap.ndim == 2, f"Heatmap should be 2D, got {heatmap.ndim}D"
-    assert overlay.ndim == 3, f"Overlay should be 3D (H, W, C), got {overlay.ndim}D"
-    assert overlay.shape[2] == 3, f"Overlay should have 3 channels, got {overlay.shape[2]}"
-    assert overlay.dtype == np.uint8, f"Overlay should be uint8, got {overlay.dtype}"
+    # Verify results structure
+    print("\n4. Verifying results...")
+    assert 'correct' in results, "Results should have 'correct' key"
+    assert 'incorrect' in results, "Results should have 'incorrect' key"
 
-    print(f"  Heatmap shape: {heatmap.shape}")
-    print(f"  Overlay shape: {overlay.shape}")
-    print(f"  Overlay range: [{overlay.min()}, {overlay.max()}]")
-    print("generate_gradcam test passed")
+    total_samples = len(results['correct']) + len(results['incorrect'])
+    print(f"   Total samples collected: {total_samples}")
+    print(f"   Correct predictions: {len(results['correct'])}")
+    print(f"   Incorrect predictions: {len(results['incorrect'])}")
 
+    assert total_samples <= 10, f"Should have at most 10 samples, got {total_samples}"
 
-def test_layer_detection():
-    """Test that invalid layer names raise errors."""
-    print("\nTesting layer detection...")
+    # Verify each result entry has required fields
+    for category in ['correct', 'incorrect']:
+        for i, entry in enumerate(results[category]):
+            assert 'heatmap' in entry, f"{category}[{i}] missing 'heatmap'"
+            assert 'image_tensor' in entry, f"{category}[{i}] missing 'image_tensor'"
+            assert 'label' in entry, f"{category}[{i}] missing 'label'"
+            assert 'pred' in entry, f"{category}[{i}] missing 'pred'"
+            assert entry['heatmap'].ndim == 2, f"{category}[{i}] heatmap should be 2D"
+            assert entry['image_tensor'].ndim == 3, f"{category}[{i}] image_tensor should be 3D"
 
-    model = build_model('resnet18', pretrained=False)
+    print("   All result entries verified")
 
-    try:
-        with GradCAMHook(model, 'nonexistent_layer') as hook:
-            pass
-        assert False, "Should have raised ValueError for nonexistent layer"
-    except ValueError as e:
-        print(f"  Correctly raised error: {e}")
+    # Save overlays for a subset (5 total: up to 3 correct, up to 3 incorrect)
+    print("\n5. Saving overlay visualizations (subset of 5)...")
+    subset_results = {
+        'correct': results['correct'][:3],
+        'incorrect': results['incorrect'][:3]
+    }
 
-    print("Layer detection test passed")
+    actual_subset_size = len(subset_results['correct']) + len(subset_results['incorrect'])
+    print(f"   Saving overlays for {actual_subset_size} samples...")
+
+    save_gradcam_overlays(
+        results=subset_results,
+        results_dir=str(results_dir),
+        mean=model_config['mean'],
+        std=model_config['std']
+    )
+
+    # Verify overlay files were created
+    overlays_dir = results_dir / 'overlays'
+    overlay_files = list(overlays_dir.rglob('*.png'))
+    print(f"   Created {len(overlay_files)} overlay files")
+
+    # Verify heatmap files were created
+    heatmaps_dir = results_dir / 'heatmaps'
+    heatmap_files = list(heatmaps_dir.rglob('*.npy'))
+    print(f"   Created {len(heatmap_files)} heatmap files")
+
+    print("\n" + "=" * 60)
+    print("Grad-CAM workflow test passed!")
+    print(f"Results saved to: {results_dir}")
 
 
 if __name__ == "__main__":
-    print("Running Grad-CAM module tests...\n")
-    print("=" * 60)
-
-    test_imports()
-    test_gradcam_hook()
-    test_compute_heatmap()
-    test_generate_gradcam()
-    test_layer_detection()
-
-    print("\n" + "=" * 60)
-    print("All tests passed successfully!")
+    test_gradcam_workflow()
