@@ -198,6 +198,7 @@ def run_experiment_grid(
     data_path: str,
     results_root: Path,
     config: Dict[str, Any],
+    pretrained: bool = True,
     device: str = "cuda"
 ) -> List[Dict[str, Any]]:
     """
@@ -213,6 +214,7 @@ def run_experiment_grid(
         data_path: Path to training data directory
         results_root: Root directory for saving results
         config: Dict with training hyperparameters (see run_single_experiment)
+        pretrained: Whether to use ImageNet pretrained weights (default: True)
         device: Device to train on ('cuda' or 'cpu')
 
     Returns:
@@ -229,12 +231,16 @@ def run_experiment_grid(
     for model_name in model_names:
         for grid_size in grid_sizes:
             try:
+                # Create config copy and set pretrained from function parameter
+                experiment_config = config.copy()
+                experiment_config['pretrained'] = pretrained
+
                 results = run_single_experiment(
                     model_name=model_name,
                     grid_size=grid_size,
                     data_path=data_path,
                     results_root=results_root,
-                    config=config,
+                    config=experiment_config,
                     device=device
                 )
                 all_results.append(results)

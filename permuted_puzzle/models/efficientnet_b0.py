@@ -12,11 +12,16 @@ def build(num_classes: int = 2, pretrained: bool = True, dropout: float = 0.2):
 
     if dropout and dropout > 0:
         model.classifier = nn.Sequential(
-            nn.Dropout(p=dropout, inplace=True),
-            nn.Linear(in_feats, num_classes)
+            nn.Dropout(p=dropout, inplace=True),  # index 0
+            nn.ReLU(inplace=True),               # index 1
+            nn.Linear(in_feats, num_classes)    # index 2
         )
     else:
-        model.classifier = nn.Linear(in_feats, num_classes)
+        # You'll need to update this, too, if you ever use it
+        model.classifier = nn.Sequential(
+            nn.ReLU(inplace=True),
+            nn.Linear(in_feats, num_classes)
+        )
 
     meta = {"input_size": 224, "mean": IMAGENET_MEAN, "std": IMAGENET_STD}
     return model, meta
