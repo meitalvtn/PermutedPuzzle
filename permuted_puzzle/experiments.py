@@ -9,8 +9,9 @@ evaluation methodology.
 import json
 import traceback
 from pathlib import Path
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Optional
 
+import numpy as np
 import torch
 
 from .data import DogsVsCatsDataset, split_indices, generate_permutation, create_loader
@@ -26,14 +27,15 @@ def run_single_experiment(
     data_path: str,
     results_root: Path,
     config: Dict[str, Any],
-    device: str = "cuda"
+    device: str = "cuda",
+    permutation: Optional[np.ndarray] = None
 ) -> Dict[str, Any]:
     """
     Run a single training experiment with train/val/test evaluation.
 
     This function encapsulates a complete experiment:
     1. Loads data and creates train/val/test splits
-    2. Generates permutation for the specified grid size
+    2. Uses provided permutation or generates one for the specified grid size
     3. Trains model using train/val sets
     4. Evaluates on held-out test set
     5. Saves all outputs (model, metrics, predictions)
@@ -51,6 +53,8 @@ def run_single_experiment(
                 - dropout: Dropout rate
                 - pretrained: Whether to use ImageNet pretrained weights (default: True)
         device: Device to train on ('cuda' or 'cpu')
+        permutation: Optional pre-generated permutation array. If provided, this will be used
+                     instead of generating a new random permutation. Must have length grid_size^2.
 
     Returns:
         Dict containing:
@@ -95,11 +99,22 @@ def run_single_experiment(
         model_config['std']
     )
 
-    # Generate permutation (None for baseline)
-    if grid_size == 1:
+    # Use provided permutation or generate one (None for baseline)
+    if permutation is not None:
+        # Validate that provided permutation matches grid_size
+        expected_len = grid_size * grid_size
+        if len(permutation) != expected_len:
+            raise ValueError(
+                f"Permutation length {len(permutation)} does not match grid_size "
+                f"{grid_size} (expected {expected_len})"
+            )
+        perm = permutation
+        print(f"Using provided permutation: {perm}")
+    elif grid_size == 1:
         perm = None
     else:
         perm = generate_permutation(grid_size=grid_size)
+        print(f"Generated random permutation: {perm}")
 
     # Create loaders (including test)
     train_loader = create_loader(
