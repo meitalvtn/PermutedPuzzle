@@ -17,7 +17,6 @@ def build(num_classes: int = 2, pretrained: bool = True, dropout: float = 0.2):
             nn.Linear(in_feats, num_classes)    # index 2
         )
     else:
-        # You'll need to update this, too, if you ever use it
         model.classifier = nn.Sequential(
             nn.ReLU(inplace=True),
             nn.Linear(in_feats, num_classes)

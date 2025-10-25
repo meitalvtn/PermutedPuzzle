@@ -166,7 +166,7 @@ def run_single_experiment(
         }
     )
 
-    # Evaluate on test set (ONLY ONCE, after training is complete)
+    # Evaluate on test set
     print(f"\n--- Evaluating on test set ---")
     test_metrics = evaluate_model(train_results['model'], test_loader, device=device)
     print(f"Test Loss: {test_metrics['loss']:.4f}, Test Acc: {test_metrics['accuracy']:.4f}")
