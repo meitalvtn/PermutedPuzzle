@@ -2,7 +2,10 @@
 Grad-CAM visualization module for model interpretability.
 
 This module provides tools to visualize which regions of an image
-a trained CNN attends to when making predictions.
+a trained model attends to when making predictions.
+
+Supports both CNN (ResNet, EfficientNet, etc.) and Transformer
+(Swin Transformer) architectures with automatic format detection.
 """
 
 from typing import Tuple, Dict, List, Optional, Union
@@ -23,13 +26,34 @@ class GradCAMHook:
     This class registers forward and backward hooks on a target layer
     to capture the activations and gradients needed for Grad-CAM computation.
 
+    Supports both CNN and Transformer architectures:
+    - CNNs (ResNet, VGG, etc.): layers output (B, C, H, W)
+    - Swin Transformers: layers output (B, H, W, C)
+
+    Automatically detects and normalizes to channels-first format.
+
     Args:
-        model: PyTorch model
-        layer_name: Name of the target convolutional layer (e.g., 'layer4')
+        model: PyTorch model (CNN or Swin Transformer)
+        layer_name: Name of the target layer
+            - For CNNs: e.g., 'layer4' (ResNet), 'features.28' (VGG)
+            - For Swin: e.g., 'features.7.1.norm1', 'features.5.5.norm2'
 
     Attributes:
-        activations: Forward activations from the target layer
-        gradients: Gradients flowing back through the target layer
+        activations: Forward activations from target layer, shape (B, C, H, W)
+        gradients: Gradients flowing back through target layer, shape (B, C, H, W)
+
+    Example:
+        # CNN (ResNet)
+        with GradCAMHook(resnet_model, 'layer4') as hook:
+            output = model(input)
+            output[0, target_class].backward()
+            heatmap = compute_gradcam_heatmap(hook.activations, hook.gradients)
+
+        # Swin Transformer
+        with GradCAMHook(swin_model, 'features.7.1.norm1') as hook:
+            output = model(input)
+            output[0, target_class].backward()
+            heatmap = compute_gradcam_heatmap(hook.activations, hook.gradients)
     """
 
     def __init__(self, model: nn.Module, layer_name: str):
@@ -67,27 +91,120 @@ class GradCAMHook:
                 return module
         return None
 
+    def _is_channels_last_format(self, tensor: torch.Tensor) -> bool:
+        """
+        Detect if 4D tensor is in (B, H, W, C) format vs (B, C, H, W).
+
+        Uses heuristic: In channels-last format, the last dimension (C) is typically
+        much larger than the middle dimensions (H, W). In channels-first format,
+        the second dimension (C) is usually much larger than the last two (H, W).
+
+        Examples:
+            (1, 7, 7, 768)   -> channels-last  (D3=768 >> D1=7, D2=7)
+            (1, 768, 7, 7)   -> channels-first (D1=768 >> D2=7, D3=7)
+            (1, 3, 224, 224) -> channels-first (D1=3 << D2=224, D3=224)
+
+        Args:
+            tensor: 4D tensor to check
+
+        Returns:
+            True if tensor is in channels-last format, False otherwise
+        """
+        if tensor.ndim != 4:
+            return False
+
+        B, D1, D2, D3 = tensor.shape
+
+        # Heuristic: Compare ratios to determine which dimension is likely channels
+        # If last dimension is much larger than spatial dims, it's likely channels-last
+        channels_last_score = D3 / max(D1, D2, 1)
+        channels_first_score = D1 / max(D2, D3, 1)
+
+        return channels_last_score > channels_first_score
+
+    def _normalize_to_channels_first(self, tensor: torch.Tensor) -> torch.Tensor:
+        """
+        Convert tensor to channels-first (B, C, H, W) format if needed.
+
+        Args:
+            tensor: 4D tensor in either (B, C, H, W) or (B, H, W, C) format
+
+        Returns:
+            Tensor in (B, C, H, W) format
+
+        Raises:
+            ValueError: If tensor is not 4D
+        """
+        if tensor.ndim != 4:
+            raise ValueError(
+                f"Expected 4D tensor, got {tensor.ndim}D tensor with shape {tensor.shape}. "
+                f"GradCAM requires convolutional or transformer layers that output 4D feature maps. "
+                f"Layer '{self.layer_name}' may not be suitable for GradCAM."
+            )
+
+        if self._is_channels_last_format(tensor):
+            # (B, H, W, C) -> (B, C, H, W)
+            return tensor.permute(0, 3, 1, 2).contiguous()
+
+        return tensor
+
+    def _validate_tensor_shape(self, tensor: torch.Tensor, tensor_type: str) -> None:
+        """
+        Validate tensor has expected 4D shape.
+
+        Args:
+            tensor: The tensor to validate
+            tensor_type: 'activations' or 'gradients' for error messages
+
+        Raises:
+            ValueError: If tensor is not 4D
+        """
+        if tensor.ndim != 4:
+            raise ValueError(
+                f"Expected 4D {tensor_type} tensor, got {tensor.ndim}D with shape {tensor.shape}"
+            )
+
     def _forward_hook(self, module: nn.Module, input: Tuple, output: torch.Tensor) -> None:
         """
         Hook to capture forward activations.
+
+        Automatically detects and normalizes tensor format:
+        - CNN layers output (B, C, H, W) - stored as-is
+        - Swin layers output (B, H, W, C) - converted to (B, C, H, W)
 
         Args:
             module: The layer module
             input: Input tensors to the layer
             output: Output tensor from the layer
+
+        Raises:
+            ValueError: If output is not a 4D tensor
         """
-        self.activations = output.detach()
+        output_detached = output.detach()
+        normalized_output = self._normalize_to_channels_first(output_detached)
+        self._validate_tensor_shape(normalized_output, 'activations')
+        self.activations = normalized_output
 
     def _backward_hook(self, module: nn.Module, grad_input: Tuple, grad_output: Tuple) -> None:
         """
         Hook to capture gradients during backpropagation.
 
+        Automatically detects and normalizes tensor format:
+        - CNN layers: gradients in (B, C, H, W) - stored as-is
+        - Swin layers: gradients in (B, H, W, C) - converted to (B, C, H, W)
+
         Args:
             module: The layer module
             grad_input: Gradients with respect to inputs
-            grad_output: Gradients with respect to outputs
+            grad_output: Gradients with respect to outputs (first element used)
+
+        Raises:
+            ValueError: If gradient is not a 4D tensor
         """
-        self.gradients = grad_output[0].detach()
+        grad_detached = grad_output[0].detach()
+        normalized_grad = self._normalize_to_channels_first(grad_detached)
+        self._validate_tensor_shape(normalized_grad, 'gradients')
+        self.gradients = normalized_grad
 
     def remove_hooks(self) -> None:
         """
@@ -194,11 +311,16 @@ def generate_gradcam(
     """
     Generate Grad-CAM heatmap and overlay for a single image.
 
+    Supports both CNN and Swin Transformer architectures with automatic format detection.
+
     Args:
-        model: Trained PyTorch model
+        model: Trained PyTorch model (CNN or Swin Transformer)
         image_tensor: Normalized image tensor, shape (1, C, H, W) or (C, H, W)
         target_class: Class index to compute Grad-CAM for. If None, uses predicted class
-        layer_name: Name of target convolutional layer (e.g., 'layer4' for ResNet)
+        layer_name: Name of target layer
+            - For ResNet: 'layer4' (final conv layer)
+            - For Swin Tiny: 'features.7.1.norm1' (stage 4, 7×7 resolution)
+                           or 'features.5.5.norm2' (stage 3, 14×14 resolution)
         device: Device to run computation on ('cuda' or 'cpu')
         mean: Normalization mean (for denormalization during visualization)
         std: Normalization std (for denormalization during visualization)
@@ -207,6 +329,14 @@ def generate_gradcam(
         Tuple of (heatmap, overlay_image)
             - heatmap: Grad-CAM heatmap, shape (H, W), values in [0, 1]
             - overlay_image: Overlay of heatmap on image, shape (H, W, 3), uint8
+
+    Example:
+        # For Swin Transformer
+        heatmap, overlay = generate_gradcam(
+            swin_model,
+            image,
+            layer_name='features.7.1.norm1'
+        )
     """
     model.eval()
     model.to(device)
